@@ -1,0 +1,8 @@
+minifb window 4x: window 1280x720, canvas 320x180, 191 frames
+  update_with_buffer (wall): avg 17.37 ms, p95 17.80 ms, max 17.83 ms
+  update_with_buffer (CPU):  avg 0.52 ms, p95 0.92 ms, max 1.13 ms
+  frame interval:            avg 17.44 ms, p95 17.86 ms, max 17.91 ms
+minifb borderless 1440x900 stretched: window 1440x900, canvas 360x225, 190 frames
+  update_with_buffer (wall): avg 17.35 ms, p95 17.78 ms, max 17.83 ms
+  update_with_buffer (CPU):  avg 0.58 ms, p95 0.99 ms, max 1.36 ms
+  frame interval:            avg 17.44 ms, p95 17.85 ms, max 17.93 ms

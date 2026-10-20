@@ -1,0 +1,7 @@
+# Without a key pressed nothing happens: the lantern bearer stands where he landed.
+seed 1
+frames 300
+at 60: grounded == true
+from 60 to 300: vx == 0
+always: sparks == 0
+always: won == false

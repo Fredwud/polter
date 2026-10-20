@@ -1,0 +1,44 @@
+[package]
+name = "polter"
+version = "0.5.0"
+description = "A 2D game engine that AI agents can drive end to end, made to run smoothly on every computer"
+license = "MPL-2.0"
+edition = "2024"
+readme = "README.md"
+keywords = ["gamedev", "engine", "2d", "deterministic", "agents"]
+categories = ["game-engines", "game-development", "graphics"]
+# what a package carries: the runtime, its docs and tests (the carts, tools and art are crates or
+# folders of their own)
+include = ["/src/**", "/tests/**", "/examples/**", "/README.md", "/API.md", "/SPEC.md", "/llms.txt", "/LICENSE", "/clippy.toml"]
+
+# checks with a real gamepad
+[[example]]
+name = "pads_raw"
+required-features = ["gamepad"]
+
+[dependencies]
+cpal = "0.18.2"
+miniquad = "=0.4.11"
+gilrs = { version = "=0.11.2", optional = true }
+
+[features]
+default = ["gamepad"]
+# Gamepads (through gilrs) press the console's buttons: pad and left stick, two face buttons.
+gamepad = ["dep:gilrs"]
+
+[workspace]
+members = ["carts/*", "dev"]
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+
+
+
+# The workshop's profile: optimised enough to play, quick to rebuild after a change
+# (no link-time optimisation, many codegen units, incremental). Shipped games use release.
+[profile.quick]
+inherits = "release"
+codegen-units = 16
+lto = false
+incremental = true

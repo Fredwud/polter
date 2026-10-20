@@ -1,0 +1,4 @@
+# Polter's rule for games (../clippy.toml: the platform's maths, the wall clock, randomly
+# ordered maps) stops here: the engine's own carts are older than polter::math, and their golden
+# frames were made with the platform's maths. Moving them means new golden frames on purpose,
+# with CI on three systems (E7).

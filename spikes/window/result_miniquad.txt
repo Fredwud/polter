@@ -1,0 +1,9 @@
+backend: OpenGl
+window (fixed): window 1280x720 px, canvas 320x180 at 4x, 198 frames
+  upload + draw + present (CPU):  avg 0.43 ms, p95 0.66 ms, max 0.71 ms
+  upload + draw + present (wall): avg 0.44 ms, p95 0.66 ms, max 0.91 ms
+  frame interval:                 avg 16.67 ms, p95 17.61 ms, max 17.79 ms
+full screen (expand): window 1440x900 px, canvas 360x225 at 4x, 180 frames
+  upload + draw + present (CPU):  avg 0.46 ms, p95 0.60 ms, max 0.86 ms
+  upload + draw + present (wall): avg 0.47 ms, p95 0.61 ms, max 0.86 ms
+  frame interval:                 avg 16.67 ms, p95 17.64 ms, max 17.87 ms

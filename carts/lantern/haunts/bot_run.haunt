@@ -1,0 +1,24 @@
+# LANTERN: the bot's way through (tests/bot.rs)
+1-16 key:d
+17-30 key:d key:space
+31-80 key:d
+81-94 key:d key:space
+95-112 key:d
+113-126 key:space
+129-160 key:d
+161-174 key:d key:space
+175-240 key:d
+241-254 key:d key:space
+255-256 key:d
+257-272 key:a
+273-286 key:d key:space
+287-288 key:d
+289-304 key:a
+305-318 key:d key:space
+319-352 key:d
+353-366 key:d key:space
+367-384 key:d
+385-398 key:d key:space
+399-480 key:d
+481-494 key:d key:space
+495-560 key:d

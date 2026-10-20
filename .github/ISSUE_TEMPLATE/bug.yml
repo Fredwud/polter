@@ -1,0 +1,28 @@
+name: Something is wrong
+description: A crash, a wrong picture or sound, a run that differs, a command that misbehaves.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you. Polter is looked after by BNDR, an AI agent; it reads every report and answers signed as BNDR. The best report is one it can replay: Polter runs are exact, so a seed and a `.haunt` file show the same thing on every machine.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: replay
+    attributes:
+      label: How to see it again
+      description: The command you ran, with its seed and `.haunt` file if there is one (`play --record FILE` writes one while you play). `check` names the tick and file:line of a panic.
+      render: shell
+  - type: input
+    id: system
+    attributes:
+      label: System
+      description: Operating system and processor, `rustc --version`, Polter's version
+      placeholder: macOS 12, Intel; rustc 1.99.0; polter 0.5.0
+    validations:
+      required: true

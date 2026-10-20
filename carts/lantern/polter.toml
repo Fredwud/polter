@@ -1,0 +1,4 @@
+# A Polter project: this folder is the game (as project.godot makes a Godot project).
+# Run it with: polter play   ·   every command: polter help
+name = "lantern"
+title = "LANTERN"

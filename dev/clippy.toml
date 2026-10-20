@@ -1,0 +1,3 @@
+# Polter's rule for games (../clippy.toml: the platform's maths, the wall clock, randomly
+# ordered maps) stops here: these are the tools, not a game. They time things, watch files and keep
+# maps, and nothing they do is a game's state.

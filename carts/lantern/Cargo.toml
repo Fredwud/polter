@@ -1,0 +1,17 @@
+[package]
+name = "lantern"
+version = "0.1.0"
+description = "Carry a lantern through a dark cave: Polter's example game"
+license = "MPL-2.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+polter = { path = "../.." }
+# The tools (the command line, the workshop, the checks): there while the game is made, left out
+# of what a player gets (`polter ship` builds without them).
+polter-dev = { path = "../../dev", optional = true }
+
+[features]
+default = ["dev"]
+dev = ["dep:polter-dev"]

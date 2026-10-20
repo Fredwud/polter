@@ -1,0 +1,12 @@
+window (fixed): window 1280x720 px, canvas 320x180 at 4x, 201 frames
+  draw the canvas: avg 0.16 ms, p95 0.20 ms, max 0.50 ms
+  scale up:        avg 1.94 ms, p95 3.03 ms, max 3.56 ms
+  present (wall):  avg 11.40 ms, p95 13.86 ms, max 16.01 ms
+  present (CPU):   avg 11.24 ms, p95 13.62 ms, max 15.66 ms
+  frame interval:  avg 17.42 ms, p95 18.04 ms, max 18.96 ms
+full screen (expand): window 1440x900 px, canvas 360x225 at 4x, 173 frames
+  draw the canvas: avg 0.16 ms, p95 0.23 ms, max 0.34 ms
+  scale up:        avg 2.03 ms, p95 3.15 ms, max 4.23 ms
+  present (wall):  avg 14.85 ms, p95 16.01 ms, max 17.20 ms
+  present (CPU):   avg 14.67 ms, p95 15.76 ms, max 16.98 ms
+  frame interval:  avg 17.34 ms, p95 18.42 ms, max 20.03 ms

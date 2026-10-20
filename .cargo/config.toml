@@ -1,0 +1,3 @@
+# Built for the machine it runs on (the 2015 MacBook Air): lets the compiler use AVX2.
+[build]
+rustflags = ["-C", "target-cpu=native"]

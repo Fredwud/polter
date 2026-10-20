@@ -1,0 +1,8 @@
+# A jump held to the top rises more than two tiles (32 pixels): every step in the level is two.
+# He stands at y = 179 before it.
+seed 1
+input 30-60 key:space
+frames 120
+at 29: y == 179
+at 50: y < 145
+at 120: grounded == true

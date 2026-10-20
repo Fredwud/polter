@@ -1,0 +1,7 @@
+# The bot's way through (tests/bot.rs): every spark, then the open door.
+seed 1
+haunt ../haunts/bot_run.haunt
+frames 600
+at 560: sparks == 5
+at 560: won == true
+always: sparks <= 5

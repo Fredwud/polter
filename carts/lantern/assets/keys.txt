@@ -1,0 +1,4 @@
+# LANTERN's keys: an action a line, then what does it (keys, mouse:left, button:… for a gamepad)
+left:  a left button:left
+right: d right button:right
+jump:  space w up z button:a

@@ -1,0 +1,11 @@
+[package]
+name = "testcard"
+version = "0.1.0"
+edition = "2024"
+# the engine's test pattern (every colour, glyph and button): part of the engine, MPL-2.0
+license = "MPL-2.0"
+publish = false
+
+[dependencies]
+polter = { path = "../.." }
+polter-dev = { path = "../../dev" }

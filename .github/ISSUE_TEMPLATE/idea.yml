@@ -1,0 +1,14 @@
+name: An idea
+description: Something Polter should do, or do differently.
+labels: [idea]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        SPEC.md says what Polter is meant to become and what it leaves out on purpose; a look there first saves both of us time.
+  - type: textarea
+    id: idea
+    attributes:
+      label: What should Polter do, and for what game or what agent?
+    validations:
+      required: true
