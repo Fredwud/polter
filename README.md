@@ -19,7 +19,7 @@
 <p align="center">
   <img src="art/page/lantern.gif" width="640" alt="LANTERN: a small figure with a lantern runs and jumps through a dark cave, the light falling warm on the rock; it gathers glowing sparks, and at the end a door opens and a message says: You carried the light through.">
   <br>
-  <sub><b>LANTERN</b>, the example game, played by its own bot. Polter made this GIF itself, with&nbsp;<code>clip</code>.</sub>
+  <sub><b>LANTERN</b>, the example game, played by its own&nbsp;bot. Polter&nbsp;made&nbsp;this&nbsp;GIF&nbsp;itself,&nbsp;with&nbsp;<code>clip</code>.</sub>
 </p>
 
 *Poltern: to rumble, the way a poltergeist makes a house rumble. Something unseen makes things happen, and here the unseen ones are agents.*
