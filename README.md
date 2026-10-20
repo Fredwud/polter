@@ -1,25 +1,25 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="art/logo/final/polter-banner-dark@2x.png">
-    <img src="art/logo/final/polter-banner-light@2x.png" alt="Polter: a 2D engine for agents and every machine" width="544">
+    <source media="(prefers-color-scheme: dark)" srcset="art/logo/final/polter-wordmark-dark-transparent@4x.png">
+    <img src="art/logo/final/polter-wordmark-light-transparent@4x.png" alt="Polter" width="496">
   </picture>
 </p>
 
 <p align="center">
-  <b>A 2D game engine that AI agents can drive end to end,<br>made to run smoothly on every computer, old ones included.</b>
+  <b>A 2D game engine that AI agents can drive&nbsp;end&nbsp;to&nbsp;end.</b><br>
+  Made to run smoothly on every computer, old&nbsp;ones&nbsp;included.
 </p>
 
 <p align="center">
   <a href="https://github.com/Fredwud/polter/actions/workflows/ci.yml"><img src="https://github.com/Fredwud/polter/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/licence-MPL--2.0-e85a9a" alt="Licence: MPL-2.0"></a>
   <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/version-0.5%20preview-ffd447" alt="Version 0.5, a preview"></a>
-  <img src="https://img.shields.io/badge/rust-stable-c06030" alt="Rust, stable">
 </p>
 
 <p align="center">
   <img src="art/page/lantern.gif" width="640" alt="LANTERN: a small figure with a lantern runs and jumps through a dark cave, the light falling warm on the rock; it gathers glowing sparks, and at the end a door opens and a message says: You carried the light through.">
   <br>
-  <sub><b>LANTERN</b>, the example game, played through by its own bot. Polter made this GIF itself: <code>lantern clip --haunt haunts/bot_run.haunt</code></sub>
+  <sub><b>LANTERN</b>, the example game, played by its own bot. Polter made this GIF itself, with&nbsp;<code>clip</code>.</sub>
 </p>
 
 *Poltern: to rumble, the way a poltergeist makes a house rumble. Something unseen makes things happen, and here the unseen ones are agents.*
@@ -115,12 +115,17 @@ impl Game for Glow {
 
 An agent can't watch a game run. Every Polter game gets a command line that turns a run into files it can read: frames, sounds, numbers, verdicts. A run is a seed and a `.haunt` file of inputs, so whatever an agent finds, it can show again.
 
-<table>
-  <tr>
-    <td width="50%" valign="top"><img src="art/page/contact_sheet.png" alt="A contact sheet: fifteen frames of LANTERN's bot run in a grid, each numbered with its tick, from the start to the open door."><br><sub><b>Eyes.</b> <code>peek</code> writes the frames as PNG files and a numbered contact sheet, with no window and no GPU. Here: LANTERN's bot run, every 40th tick.</sub></td>
-    <td width="50%" valign="top"><img src="art/page/ears.png" alt="The sound of the run as a picture: a waveform and a spectrogram along a timeline in ticks, every sound named where it starts: jump, land, spark, door, win."><br><sub><b>Ears.</b> <code>listen</code> renders the sound as a WAV file and a picture: waveform, spectrogram, and every sound named where it starts, so timing and pitch can be checked without hearing.</sub></td>
-  </tr>
-</table>
+<p align="center">
+  <img src="art/page/contact_sheet.png" alt="A contact sheet: fifteen frames of LANTERN's bot run in a grid, each numbered with its tick, from the start to the open door.">
+  <br>
+  <sub><b>Eyes.</b> <code>peek</code> writes the frames as PNG files and a numbered contact sheet, with no window and no GPU. Here: LANTERN's bot run, every 40th tick.</sub>
+</p>
+
+<p align="center">
+  <img src="art/page/ears.png" alt="The sound of the run as a picture: a waveform and a spectrogram along a timeline in ticks, every sound named where it starts: jump, land, spark, door, win.">
+  <br>
+  <sub><b>Ears.</b> <code>listen</code> renders the sound as a WAV file and a picture: waveform, spectrogram, and every sound named where it starts, so timing and pitch can be checked without hearing.</sub>
+</p>
 
 <p align="center">
   <img src="art/page/workshop.png" alt="The workshop: LANTERN large on the left, a panel on the right with knobs on faders (run, acceleration, gravity, jump) and the game's state, and below a tape deck with a scrub bar, buttons for start, rewind, play, pause, fast forward, step, record and cue, a time display and two needle meters.">
