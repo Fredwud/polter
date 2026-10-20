@@ -653,6 +653,12 @@ mod tests {
 
     #[test]
     fn paths_are_tidied_without_the_file_system() {
-        assert_eq!(absolute(Path::new("/x/./y/../z")), PathBuf::from("/x/z"));
+        // a path that is already whole: on Windows that takes a drive
+        let (raw, tidy) = if cfg!(windows) {
+            (r"C:\x\.\y\..\z", r"C:\x\z")
+        } else {
+            ("/x/./y/../z", "/x/z")
+        };
+        assert_eq!(absolute(Path::new(raw)), PathBuf::from(tidy));
     }
 }

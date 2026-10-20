@@ -61,10 +61,18 @@ fn cell(s: &str) -> String {
     s.replace('|', "\\|").replace('\n', " ")
 }
 
-/// A path for the page: inside the project as it is there, elsewhere in full.
+/// A path for the page: inside the project as it is there, with `/` between its parts on every
+/// system (the page reads the same on Windows), elsewhere in full.
 fn shown(p: &Path, project: &Path) -> String {
-    p.strip_prefix(project)
-        .map_or_else(|_| p.display().to_string(), |r| r.display().to_string())
+    p.strip_prefix(project).map_or_else(
+        |_| p.display().to_string(),
+        |r| {
+            r.components()
+                .map(|c| c.as_os_str().to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/")
+        },
+    )
 }
 
 /// What BRIEF.md says: its title, its one sentence, the rest.
