@@ -98,6 +98,8 @@ def render(name):
 
 
 def main():
+    # ✓ and ✗ on every console (Windows' may write cp1252, which has neither)
+    sys.stdout.reconfigure(encoding="utf-8")
     mode = sys.argv[1] if len(sys.argv) > 1 else "check"
     names = sys.argv[2:] or list(RUNS)
     bad = 0
