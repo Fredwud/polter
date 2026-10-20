@@ -2,7 +2,7 @@
 
 What changed, newest first. Until 1.0 a minor version may change the API; from 1.0 on Polter follows semantic versioning.
 
-## 0.5.0, not yet released: the first public preview
+## 0.5.0, 20 October 2026: the first public preview
 
 Everything a small 2D game needs, and the tools an agent needs to make one, proven by an example game made with nothing else ([`carts/lantern`](carts/lantern)).
 
@@ -31,7 +31,7 @@ Everything a small 2D game needs, and the tools an agent needs to make one, prov
 
 - Tested by hand on macOS 12 (Intel) only.
 - Gamepads: tried with one pad, a DualShock 4 on macOS: it presses all six console buttons (`examples/pads`). Other pads and systems are not yet tried.
-- Windows and Linux compile and pass clippy; the CI runs the tests there, nobody has played on them yet. Analogue sticks reach the game only as directions.
+- Windows and Linux: the CI's tests and golden frames pass there (LANTERN's 576 frames bit for bit those from an Intel Mac, also on an ARM Mac), but nobody has played on them yet. Analogue sticks reach the game only as directions.
 - No kerning; no music yet (sound effects only); no phones or tablets.
 
 ## Before 0.5
