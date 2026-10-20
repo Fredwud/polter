@@ -93,12 +93,18 @@ fn the_docs_links_lead_somewhere() {
 
 #[test]
 fn the_readme_shows_the_example_as_it_is() {
-    let code = std::fs::read_to_string(root().join("examples/glow.rs")).unwrap();
+    // as checked out: on Windows git may have turned every line's end into \r\n
+    let read = |path: &str| {
+        std::fs::read_to_string(root().join(path))
+            .unwrap()
+            .replace("\r\n", "\n")
+    };
+    let code = read("examples/glow.rs");
     let start =
         code.find("// readme: start\n").expect("the start mark") + "// readme: start\n".len();
     let end = code.find("// readme: end").expect("the end mark");
     let shown = format!("```rust\n{}```", &code[start..end]);
-    let readme = std::fs::read_to_string(root().join("README.md")).unwrap();
+    let readme = read("README.md");
     assert!(
         readme.contains(&shown),
         "README.md should show examples/glow.rs between its marks, as it is"

@@ -1,0 +1,7 @@
+# Text files keep \n line ends everywhere, also when checked out on Windows: levels, .haunt
+# files, scenarios and golden frames are read as text, and a run must be the same on every machine.
+* text=auto eol=lf
+*.png binary
+*.gif binary
+*.wav binary
+*.ico binary
