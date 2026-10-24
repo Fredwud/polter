@@ -8,7 +8,7 @@ A game is one of two kinds:
 
 Both get the same command line, the same invariants and the same scenarios.
 
-A game lives in its own folder, anywhere: `polter new FOLDER` makes one that runs (see the README, *A game of your own*), and `polter COMMAND [FOLDER]` builds it and runs any command below on it.
+A game lives in its own folder, anywhere. The `polter` program (README.md, *Start*) makes one that runs with `polter new FOLDER`, and `polter COMMAND [FOLDER]` builds it and runs any command below on it.
 
 ## The machine
 
@@ -17,7 +17,8 @@ A game lives in its own folder, anywhere: `polter new FOLDER` makes one that run
 | Screen | 320 × 180 pixels, `WIDTH` / `HEIGHT` |
 | Colours | up to 256 palette slots (`Col`), nothing else can be drawn; 16 named slots in the built-in palettes |
 | Buttons | `Left Right Up Down A B` (window: arrows, Z, X) |
-| Mouse and keys | optional, for desktop carts: cursor in screen pixels, three buttons, wheel, 43 keys |
+| Mouse and keys | optional, for desktop carts: cursor in screen pixels, three buttons, wheel, 62 keys |
+| Gamepad | presses the six buttons; for carts that want it whole: 17 buttons of its own, two sticks and two triggers with their values (`PadButton`, `Stick`) |
 | Time | 60 frames per second (`FPS`), fixed: every frame is exactly 1/60 s |
 | Randomness | `ctx.rng`, seeded: same seed and inputs give the same game |
 
@@ -42,20 +43,27 @@ impl Cart for Hello {
 }
 ```
 
-**Every game is its own crate** in `carts/`, using the engine as a library. Its `main` is one call, and the game gets the whole command line for free:
+**Every game is its own crate**, using the engine as a library; its `main` is one call, and the game gets the whole command line for free. `polter new star-pilot` writes:
 
 ```text
-carts/hello/Cargo.toml    [package] name = "hello" … [dependencies] polter = { path = "../.." }
-                                                                   polter-dev = { path = "../../dev" }
-carts/hello/src/lib.rs    the cart (a library, so tests in carts/hello/tests/ can use it)
-carts/hello/src/main.rs   fn main() -> std::process::ExitCode {
-                              polter_dev::cli::run(&[polter_dev::cli::CartInfo {
-                                  name: "hello", about: "Says hello.", make: || Box::new(hello::Hello::new()),
-                              }])
-                          }
+polter.toml               name and title: this folder is a Polter game
+Cargo.toml                its own workspace: polter by path to the engine, polter-dev behind the
+                          feature `dev` (on by default); the profiles `quick` and `release`
+clippy.toml               what would make the game play differently on another machine
+BRIEF.md                  one page: what the game is meant to be
+src/lib.rs                the game (a library, so tests in tests/ can use it)
+src/main.rs               with `dev`:    polter_dev::cli::run_games(&[polter_dev::cli::GameInfo {
+                                             name: NAME, about: "…",
+                                             make: || Box::new(star_pilot::StarPilot::new()),
+                                         }])
+                          without it:    polter::app::play(NAME, Box::new(star_pilot::StarPilot::new()))
+scenarios/start.scenario  its first scenario
+assets/ levels/ haunts/   empty, for pictures, levels and recorded play
 ```
 
-**The runtime and the tools are apart.** `polter` is what a player gets: the canvas, the console, sessions, input, sound, the window, `polter::app` (a game in its window). `polter-dev` (in `dev/`) is what making a game needs: the command line, scenarios, contact sheets, sound pictures, the workshop. A game made by `polter new` has the tools behind a feature, `dev`, on by default; `polter ship` builds it without them, and its `main` is then `polter::app::play(NAME, Box::new(Game::new()))`. Tools that ride along with a game in its window implement `polter::app::Along` (the command line's `play --record` does).
+A cart's `main` calls `polter_dev::cli::run(&[polter_dev::cli::CartInfo { name, about, make }])` instead. All games build into one shared folder (`~/Library/Caches/Polter/target` on a Mac, `~/.cache/polter/target` elsewhere, or `POLTER_TARGET`), so the engine is built once. The engine's own carts (`carts/lantern`, `carts/testcard`) are crates in the engine's workspace instead.
+
+**The runtime and the tools are apart.** `polter` is what a player gets: the canvas, the console, sessions, input, sound, the window, `polter::app` (a game in its window). `polter-dev` (in `dev/`) is what making a game needs: the command line, scenarios, contact sheets, sound pictures, the workshop. `polter ship` builds a game without the feature `dev`, so without the tools. Tools that ride along with a game in its window implement `polter::app::Along` (the command line's `play --record` does).
 
 **Read `carts/lantern`**: everything this page describes in one small game in true colour (PNG pictures and an Aseprite sheet, animation, tiles from text, a camera, actions, text, light), a bot that proves it can be done, and scenarios. `carts/testcard` is the smallest console cart.
 
@@ -91,6 +99,9 @@ carts/hello/src/main.rs   fn main() -> std::process::ExitCode {
 | `mouse_held(b)` / `mouse_pressed(b)` / `mouse_released(b)` | `b` is `Mouse::LEFT`, `Mouse::RIGHT` or `Mouse::MIDDLE` |
 | `wheel()` | wheel steps this frame, positive is up |
 | `key(k)` / `key_pressed(k)` / `key_released(k)` | `k` is a `Key`: `A`–`Z`, `Num0`–`Num9`, `Space`, `Enter`, `Tab`, `Backspace`, `Shift`, `Delete`, `Escape`, `Up`, `Down`, `Left`, `Right`, `F1`–`F12`, `Ctrl`, `Alt`, `Super` (Cmd on a Mac) |
+| `pad(b)` / `pad_pressed(b)` / `pad_released(b)` | a gamepad's own button, `b` a `PadButton`: `South East West North` (on a DualShock 4 cross, circle, square, triangle; on an Xbox pad A B X Y), `L1 R1 L2 R2`, `Select Start Mode` (Share, Options, PS), `L3 R3` (the sticks pressed in), `Up Down Left Right` (the arrows) |
+| `stick(s)` | where a stick leans, `(x, y)` from -1 to 1, right and up positive; `s` is `Stick::Left` or `Stick::Right`. Raw, without a dead zone: a pad at rest reads a little off centre (`examples/pads` measures how much), so a game picks its own |
+| `trigger(s)` | how far L2 (`Stick::Left`) or R2 (`Stick::Right`) is pressed, 0 to 1 |
 
 A cart that uses the mouse says so with `fn wants_mouse(&self) -> bool { true }`: the window then hides the system cursor (draw your own) and leaves P and Escape to the cart (F1 cycles palettes; quit with Cmd+Q or by closing the window).
 
@@ -128,7 +139,6 @@ The font: `A–Z 0–9` and `. , ! ? : ; - + = * / ' " ( ) [ ] < > % # _ & @ ·`
 | `Visor` | Y | `#FFD447` | lights, eyes |
 | `Ember` | O | `#FF6A1F` | the one loud accent |
 | `Beret` | R | `#A3312A` | warm dark |
-
 | `Sand` | D | `#C9A26B` | warm light earth |
 | `Clay` | L | `#7A5136` | warm mid earth |
 | `Bark` | B | `#4A2F22` | dark brown |
@@ -206,6 +216,23 @@ fn invariants(&self, check: &mut Invariants) {
 
 `check`, `probe`, `peek`, `shot`, `twin`, `listen` and `assert` check them after every frame, and stop at the first broken one with the frame, the rule and the state (exit 1). In the window, a broken rule is printed once and the game goes on. Write the rules that a game can break *during* a run, not only at the end: a cooldown that fires early, a bolt counted twice, money below zero. Those are the errors final-state tests miss.
 
+## Knobs
+
+A knob is a tuning value the person drags in the workshop as a fader (jump height, gravity, a colour). A game (or a cart: the same two methods) reports its knobs with their current values and sets one by name:
+
+```rust
+use polter::Knob;
+
+fn knobs(&self) -> Vec<Knob> {
+    vec![Knob::new("speed", self.speed, 0.5, 4.0, 0.1)]   // name, value, min, max, step
+}
+fn set_knob(&mut self, name: &str, value: f32) {
+    if name == "speed" { self.speed = value; }             // unknown names do nothing
+}
+```
+
+`set_knob` is called from a fader, from `knobs.txt` or from a `knob NAME VALUE` line in `commands.txt` (*The workshop*); the workshop records every change with its tick, so a replay stays exact. The command `knobs` lists them.
+
 ## A true-colour game
 
 ```rust
@@ -239,7 +266,7 @@ impl Game for Glow {
 
 **Pictures from PNG files** (`polter::image::Image`): `Image::load("assets/hero.png")?` reads any PNG (every colour type and bit depth, interlaced or not) into RGBA pixels, `0xAARRGGBB`; the error names the file and what is wrong with it. `image.frames(w, h)` cuts a sprite sheet laid out in a grid into its frames, row by row; `image.part(x, y, w, h)` takes one rectangle. Load pictures once (in the game's `new`), not in `draw`.
 
-Optional `Game` methods: `fit()` (how the picture fills the window: `Fit::Fixed` keeps the size from `size()` with bars around; `Fit::Expand` grows the canvas so a whole scale fills the screen with no bars, at least `size()`; `draw` then reads `canvas.width()`, and `update` must not depend on it), `wants_mouse()`, `next_look()` (F1 in the window switches to the next look and names it), `missing_glyphs()`. A cart becomes a `Game` through the console (`Console::new(cart)`), which paints its screen through the chosen palette.
+Optional `Game` methods: `fit()` (how the picture fills the window, `polter::window::Fit`: `Fixed` keeps the size from `size()` with bars around; `Expand` grows the canvas so a whole scale fills the screen with no bars, at least `size()`; `Native` makes the canvas the window's size, one picture pixel to one screen pixel; with `Expand` and `Native`, `draw` reads `canvas.width()`, and `update` must not depend on it), `wants_mouse()`, `next_look()` (F1 in the window switches to the next look and names it), `missing_glyphs()`, `knobs()` and `set_knob()` (*Knobs*), `snapshot()` and `freeze()` (*The workshop*). A cart becomes a `Game` through the console (`Console::new(cart)`), which paints its screen through the chosen palette.
 
 ## Animation
 
@@ -322,13 +349,11 @@ let run = actions.axis(&ctx.input, "left", "right");   // -1, 0 or 1
 if actions.pressed(&ctx.input, "jump") { /* … */ }     // also held(), released()
 ```
 
-**Gamepads** press the console's buttons: the pad and the left stick (past `pad::STICK`, 0.4) are the directions, the lower face button A, the right one B. So a game made for the keyboard plays with a pad as it is, and whatever a pad does is recorded and replayed like the keys (the window puts it in the tick's `Frame`); a pad's press takes over a playback in the workshop like a key's. They are read through gilrs, with the feature `gamepad`, on by default; `polter = { …, default-features = false }` leaves them out (a shipped game 0.36 MB smaller). Analogue values don't reach the game yet.
+**Gamepads** press the console's buttons: the pad and the left stick (past `pad::STICK`, 0.4) are the directions, the lower face button A, the right one B. So a game made for the keyboard plays with a pad as it is. A game that wants the whole pad reads its own buttons, both sticks and both triggers from the `Input` (`pad`, `stick`, `trigger`), and binds the buttons to actions as `pad:NAME` (`fire: mouse:left pad:r2`). A stick's lean is a value, so a light touch can be a slow walk. With several pads plugged in they play as one: their buttons together, of each stick and trigger the one leant furthest. Whatever a pad does is recorded and replayed like the keys (the window puts it in the tick's `Frame`, sticks in steps of 1/127, triggers in steps of 1/255, so a replay is exact); a pad's press takes over a playback in the workshop like a key's. They are read through gilrs, with the feature `gamepad`, on by default; `polter = { …, default-features = false }` leaves them out (a shipped game 0.36 MB smaller). Not through gilrs on a Mac: the touchpad, the gyro, the light bar and rumble. `cargo run --release --example pads` checks a pad in your hands.
 
 ## The command line every game gets
 
-The same vocabulary as Poltergeist (an agents' workbench for Godot by the same author), so it is learned once.
-
-Run it as `cargo run --release -p GAME -- COMMAND`, or call the built binary `target/release/GAME COMMAND`. The cart name can be left out when a program contains only one cart.
+Run it as `polter COMMAND [FOLDER] [OPTIONS]`, which builds the game first. The game's program takes the same commands (`GAME COMMAND`); an engine cart runs as `cargo run --release -p NAME -- COMMAND` from the engine's folder. A program can hold several carts (`carts` lists them): the cart's name goes after the command, and can be left out when there is only one.
 
 | Command | |
 |---|---|
@@ -360,6 +385,9 @@ Saves (`ctx.storage`) live in the system's folder for program data when a person
 | `move X,Y>X,Y` | the cursor glides over the frame range (with `click`: a drag) |
 | `wheel+N` / `wheel-N` | wheel steps on each frame of the range |
 | `key:NAME` | a key held, e.g. `key:r`, `key:space` |
+| `pad:NAME` | a gamepad's own button held, e.g. `pad:south`, `pad:r2` |
+| `lstick X,Y` / `rstick X,Y` | a stick leans so from this frame on, e.g. `lstick 0.3,0` (a light lean right) |
+| `l2 V` / `r2 V` | a trigger pressed so far (0 to 1) from this frame on |
 
 `play --record` writes all of these, so a human's session replays exactly.
 
@@ -368,15 +396,16 @@ Saves (`ctx.storage`) live in the system's folder for program data when a person
 A scenario is a start, the inputs, and what must be true at which frames. Agents write them to prove a rule; a human's recording becomes one; a judge can keep some hidden.
 
 ```text
-# GIRDER: the bot's recorded run collects every bolt
+# LANTERN: the bot's way through gathers every spark, then the door opens
 seed 1
 haunt ../haunts/bot_run.haunt       # inputs, relative to this file
-input 10-20 right a                 # more input: a line as in a .haunt file
-frames 800                          # how long (default: the last frame named below)
-at 600: bolts >= 6                  # at one frame
-from 1 to 650: mode != "title"      # on every frame of a range
-always: bolts <= 8                  # on every frame
+frames 600                          # how long (default: the last frame named below)
+at 560: sparks == 5                 # at one frame
+at 560: won == true
+always: sparks <= 5                 # on every frame
 ```
+
+Two more kinds of line: `input 30-60 key:space` adds input, a line as in a `.haunt` file; `from 60 to 300: vx == 0` checks every frame of a range.
 
 An expectation compares a key of `state()` with a number, `true`, `false`, `null` or a `"text"` by `==`, `!=`, `<`, `<=`, `>`, `>=` (only numbers can be ordered). `assert` reports each one: passed, with how many frames it checked, or the first frame it broke and the value there. A key that isn't in the state, or a frame after an explicit `frames`, is reported with the line. `carts/lantern/scenarios/` has examples.
 
@@ -395,7 +424,7 @@ An expectation compares a key of `state()` with a number, `true`, `false`, `null
 
 ## The workshop
 
-`GAME workshop` opens a tape deck for the game: the person plays, everything played is recorded, and the tape winds to any tick. A panel beside the game holds the knobs as faders, the rules and the state; an agent works on the same session through files.
+`polter workshop FOLDER` (or `GAME workshop`) opens a tape deck for the game: the person plays, everything played is recorded, and the tape winds to any tick. A panel beside the game holds the knobs as faders, the rules and the state; an agent works on the same session through files.
 
 | Key or mouse | |
 |---|---|
@@ -408,13 +437,13 @@ An expectation compares a key of `state()` with a number, `true`, `false`, `null
 | faders | drag to set a knob; the wheel scrolls them when there are more than fit |
 | the panel's handle | fold the panel away for a larger game, and back (Alt+H) |
 
-**Code changes without starting over:** when the game's program is built anew (the same file the workshop runs from), the workshop reloads itself and replays the session to the tick it was at, paused there, now with the new code. Build with the `quick` profile and run the workshop from `target/quick/` for rebuilds in seconds. `workshop --continue` is the same by hand: the session in the folder goes on.
+**Code changes without starting over:** when the game's program is built anew (the same file the workshop runs from), the workshop reloads itself and replays the session to the tick it was at, paused there, now with the new code. `polter build FOLDER` rebuilds in the `quick` profile, the one `polter workshop` runs from, in seconds (an engine cart: `cargo build --profile quick -p NAME`, the workshop started from `target/quick/`). `workshop --continue` is the same by hand: the session in the folder goes on.
 
 While Alt (Option) is held the game gets no keys. A game key or a click into the game during playback takes over: the rest of the tape is recorded over. Nothing is lost by that: what was there is kept as a take first.
 
 The deck shows what works first: when the window narrows, the cassette goes (it repeats what the tape shows), then the LEVEL meter, then LOAD, then the display; the keys get narrower but stay. LEVEL is the game's sound; LOAD is the time a tick takes against its 16.7 ms.
 
-The shared folder (the game's data folder `/workshop`, or `--dir`):
+The shared folder: `FOLDER/.polter/workshop` when `polter workshop FOLDER` starts it, `workshop` in the game's data folder when the game's own program does (`~/Library/Application Support/<game>/workshop` on a Mac), or `--dir DIR`:
 
 | File | |
 |---|---|
@@ -425,7 +454,7 @@ The shared folder (the game's data folder `/workshop`, or `--dir`):
 | `marks` (folder) | per mark a picture (three times the size) and its tick, state, knobs and note |
 | `sessions` · `takes` (folders) | earlier sessions; recordings as they were before something was recorded over them |
 
-Going back plays the recording again from the start, which is exact for a deterministic game but slow in long sessions. A game that can copy itself makes it fast: the workshop keeps copies along the tape (every two seconds, at most 128, thinned as the tape grows) and plays only from the last one. Ten minutes of GIRDER, one second back at the end: 1827 ms without copies, 15.3 ms with them (`cargo test --release -p girder --test workshop_speed -- --ignored --nocapture`).
+Going back plays the recording again from the start, which is exact for a deterministic game but slow in long sessions. A game that can copy itself makes it fast: the workshop keeps copies along the tape (every two seconds, at most 128, thinned as the tape grows) and plays only from the last one.
 
 ```rust
 #[derive(Clone)]
@@ -441,4 +470,4 @@ impl Game for MyGame {                                 // for a cart: impl Cart,
 
 `draw` must paint the whole picture from the state (copies keep no picture).
 
-A game too big to copy whole (a world of millions of cells) freezes its moments instead: `fn freeze(&self) -> Option<Box<dyn Frozen>>`. A `Frozen` only has to `thaw()` into the game again and say how many `bytes()` it holds, counting what it shares with other moments (unchanged parts of the world behind an `Arc`) as a share. The workshop keeps frozen moments under 256 MB together (`MOST_BYTES`) and thins them out like copies. When a game freezes, `snapshot` is not asked. The moment at tick 0 is always kept (frozen or copied), so going back to the start never makes the game again. SHARDFALL's valley, a minute in: 30 moments and the start in 206 MB, one second back in 313 ms, back to the start in 294 ms instead of 5.8 s.
+A game too big to copy whole (a world of millions of cells) freezes its moments instead: `fn freeze(&self) -> Option<Box<dyn Frozen>>`. A `Frozen` only has to `thaw()` into the game again and say how many `bytes()` it holds, counting what it shares with other moments (unchanged parts of the world behind an `Arc`) as a share. The workshop keeps frozen moments under 256 MB together (`MOST_BYTES`) and thins them out like copies. When a game freezes, `snapshot` is not asked. The moment at tick 0 is always kept (frozen or copied), so going back to the start never makes the game again.

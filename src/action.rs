@@ -2,21 +2,26 @@
 // the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 //! Actions: a game asks for "jump", not for the space bar. Each action is bound to keys, mouse
-//! buttons and the console's buttons (which a gamepad presses too: its pad and left stick are
-//! the directions, its lower face button A, its right one B). Bindings are text, one action a
-//! line, so a player or an agent changes them in a file:
+//! buttons, the console's buttons (which a gamepad presses too: its pad and left stick are
+//! the directions, its lower face button A, its right one B) and a gamepad's own buttons
+//! (`pad:south`, `pad:r1`, `pad:r2` …; `PadButton`). Bindings are text, one action a line, so a
+//! player or an agent changes them in a file:
 //!
 //! ```text
 //! # actions
-//! left:  a left button:left
-//! right: d right button:right
-//! jump:  space w up button:a
-//! fire:  mouse:left button:b
+//! left:   a left button:left
+//! right:  d right button:right
+//! jump:   space w up button:a
+//! fire:   mouse:left button:b pad:r2
+//! sprint: shift pad:l3
 //! ```
+//!
+//! How far a stick leans or a trigger is pressed is no action; a game reads it from the `Input`
+//! (`stick`, `trigger`).
 //!
 //! Actions are plain data and read the tick's `Input`, so they record and replay with the game.
 
-use crate::input::{Button, Input, Key, Mouse};
+use crate::input::{Button, Input, Key, Mouse, PadButton};
 
 /// One thing that can trigger an action.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -26,6 +31,8 @@ pub enum Bind {
     Mouse(u8),
     /// A console button: arrows, Z and X on the keyboard, and the gamepad.
     Button(Button),
+    /// A gamepad's own button.
+    Pad(PadButton),
 }
 
 impl Bind {
@@ -34,6 +41,7 @@ impl Bind {
             Bind::Key(k) => input.key(k),
             Bind::Mouse(m) => input.mouse_held(m),
             Bind::Button(b) => input.held(b),
+            Bind::Pad(b) => input.pad(b),
         }
     }
 
@@ -42,6 +50,7 @@ impl Bind {
             Bind::Key(k) => input.key_pressed(k),
             Bind::Mouse(m) => input.mouse_pressed(m),
             Bind::Button(b) => input.pressed(b),
+            Bind::Pad(b) => input.pad_pressed(b),
         }
     }
 
@@ -50,10 +59,11 @@ impl Bind {
             Bind::Key(k) => input.key_released(k),
             Bind::Mouse(m) => input.mouse_released(m),
             Bind::Button(b) => input.released(b),
+            Bind::Pad(b) => input.pad_released(b),
         }
     }
 
-    /// The bind as it is written: `space`, `mouse:left`, `button:a`.
+    /// The bind as it is written: `space`, `mouse:left`, `button:a`, `pad:south`.
     pub fn name(self) -> String {
         match self {
             Bind::Key(k) => k.name(),
@@ -66,6 +76,7 @@ impl Bind {
                 }
             ),
             Bind::Button(b) => format!("button:{}", b.name()),
+            Bind::Pad(b) => format!("pad:{}", b.name()),
         }
     }
 
@@ -82,6 +93,9 @@ impl Bind {
         }
         if let Some(b) = s.strip_prefix("button:") {
             return Button::from_name(b).map(Bind::Button);
+        }
+        if let Some(b) = s.strip_prefix("pad:") {
+            return PadButton::from_name(b).map(Bind::Pad);
         }
         Key::from_name(&s).map(Bind::Key)
     }
@@ -134,7 +148,7 @@ impl Actions {
             let mut binds = Vec::new();
             for word in rest.split_whitespace() {
                 binds.push(Bind::from_name(word).ok_or(format!(
-                    "line {}: {word:?} is no key, mouse:left/right/middle or button:left/right/up/down/a/b",
+                    "line {}: {word:?} is no key, mouse:left/right/middle, button:left/right/up/down/a/b or pad:south/east/west/north/l1/r1/l2/r2/select/start/mode/l3/r3/up/down/left/right",
                     n + 1
                 ))?);
             }
@@ -199,7 +213,8 @@ mod tests {
         left: a left button:left\n\
         right: d right button:right\n\
         jump: space W button:a   # W in capitals reads too\n\
-        fire: mouse:left button:b\n";
+        fire: mouse:left button:b pad:R2\n\
+        sprint: shift pad:l3\n";
 
     fn input_after(frames: &[Frame]) -> Input {
         let mut input = Input::default();
@@ -212,13 +227,14 @@ mod tests {
     #[test]
     fn bindings_read_from_text_and_write_back_the_same() {
         let a = Actions::parse(TEXT).unwrap();
-        assert_eq!(a.names(), ["left", "right", "jump", "fire"]);
+        assert_eq!(a.names(), ["left", "right", "jump", "fire", "sprint"]);
         assert_eq!(Actions::parse(&a.to_text()).unwrap(), a);
         for (text, says) in [
             ("jump space", "wants `name: binds`"),
             ("jump: spacebar", "\"spacebar\" is no key"),
             ("big jump: space", "one word"),
             ("fire: mouse:thumb", "is no key"),
+            ("fire: pad:r4", "is no key"),
         ] {
             let err = Actions::parse(text).unwrap_err();
             assert!(
@@ -275,6 +291,21 @@ mod tests {
             ),
             -1
         );
+        // a gamepad's own buttons: the trigger fires, the stick pressed in sprints
+        let r2 = Frame {
+            pad: crate::input::PadFrame {
+                buttons: PadButton::R2.bit(),
+                ..Default::default()
+            },
+            ..Frame::default()
+        };
+        assert!(a.pressed(&input_after(&[Frame::default(), r2]), "fire"));
+        assert!(
+            a.held(&input_after(&[r2, r2]), "fire") && !a.pressed(&input_after(&[r2, r2]), "fire"),
+            "held on: not pressed again"
+        );
+        assert!(a.released(&input_after(&[r2, Frame::default()]), "fire"));
+        assert!(!a.held(&input_after(&[r2]), "sprint"));
         // unknown actions are never anything
         assert!(!a.held(&input_after(&[space]), "dance"));
     }

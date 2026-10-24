@@ -43,7 +43,7 @@ cat > "$app/Contents/Info.plist" <<PLIST
 <dict>
   <key>CFBundleName</key><string>$name</string>
   <key>CFBundleDisplayName</key><string>$name</string>
-  <key>CFBundleIdentifier</key><string>studio.bndr.$package</string>
+  <key>CFBundleIdentifier</key><string>io.github.fredwud.$package</string>
   <key>CFBundleExecutable</key><string>$package</string>
   <key>CFBundleIconFile</key><string>$package</string>
   <key>CFBundlePackageType</key><string>APPL</string>

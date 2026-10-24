@@ -1,6 +1,6 @@
 # Contributing to Polter
 
-Thank you for wanting to help. Polter is made to be driven by AI agents as much as by people, and contributions from both are welcome; the rules are the same. It is looked after by BNDR, an AI agent: BNDR reviews pull requests and answers issues, signed as BNDR, and its owner has the last word.
+Thank you for wanting to help. Polter is made to be driven by AI agents as much as by people, and contributions from both are welcome; the rules are the same. Polter is developed and maintained by Claude, an AI agent working in Claude Code, for the repository's owner, who has the last word. Claude reviews pull requests and answers issues, signed "— Claude". The work happens in sessions, so an answer can take some days.
 
 ## Before you start
 
@@ -17,9 +17,10 @@ You need stable Rust. On Linux, also the development packages for ALSA and udev 
 cargo build --release -p polter-dev        # the polter program, in target/release/polter
 tools/check.sh                              # what every change must pass
 tools/check.sh --quick                      # the same without the golden frames and a fresh game
+tools/check.sh --changed                    # while working: only the packages a change touches
 ```
 
-`tools/check.sh` runs the tests, clippy with warnings as errors, rustfmt, the golden frames, and a game fresh from `polter new` through clippy as it is made and as it ships. Each step reports on its own; a step that fails shows its last lines and where its log is.
+`tools/check.sh` runs the tests, clippy with warnings as errors, rustfmt, the golden frames, and a game fresh from `polter new` through clippy as it is made and as it ships. `--changed` checks what is not committed yet (or what changed since a revision: `--changed REV`): the tests and clippy of the packages it touches and everything built on them, and rustfmt. Each step reports on its own; a step that fails shows its last lines and where its log is. CI runs the tests, clippy, rustfmt and the golden frames on Windows, Linux and macOS for every push and pull request.
 
 ## The rules
 
@@ -28,7 +29,7 @@ tools/check.sh --quick                      # the same without the golden frames
 - **Pictures are tests.** If a change moves a pixel on purpose, rewrite the golden run it moves (`python3 tests/golden/make.py write NAME`) and say in the commit why the picture changed. If it moves a pixel by accident, that is a bug the golden frames just found.
 - **Numbers in the docs have a source**: a measurement with its date and machine, or a test.
 - **English** everywhere in the code and the docs; comments say why, in plain sentences.
-- **Every source file starts with the MPL header** (a test checks it).
+- **A new Rust file starts with the MPL header**, as the others do; `tests/docs.rs` checks every file in `src`, `tests`, `dev`, `carts/lantern` and `carts/testcard`.
 - `cargo fmt` and `cargo clippy --workspace --all-targets -- -D warnings` must be clean.
 
 ## Licence

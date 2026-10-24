@@ -33,14 +33,16 @@ Written in Rust, licensed under the MPL-2.0. Version 0.5 is a public preview.
 You need Rust (stable). On Linux also the development packages for ALSA and udev (`libasound2-dev libudev-dev pkg-config` on Debian and Ubuntu).
 
 ```sh
-cargo build --release -p polter-dev            # the polter program: target/release/polter
-polter new ~/Projects/star-pilot               # a game that runs and passes its first scenario
-polter workshop ~/Projects/star-pilot          # play it on a tape deck: rewind, mark, tune
-polter brief ~/Projects/star-pilot             # one page about it, for an agent
-polter ship ~/Projects/star-pilot              # what a player gets, without the tools
+git clone https://github.com/Fredwud/polter && cd polter
+cargo build --release -p polter-dev            # the polter program
+export PATH="$PWD/target/release:$PATH"        # so this shell finds it
+polter new ~/star-pilot                        # a game that runs and passes its first scenario
+polter workshop ~/star-pilot                   # play it on a tape deck: rewind, mark, tune
+polter brief ~/star-pilot                      # one page about it, for an agent
+polter ship ~/star-pilot                       # what a player gets, without the tools
 ```
 
-A game is a folder with a *polter.toml* in it, wherever you like (as a Godot project is a folder with *project.godot*). `polter manager` is the same as a window. Inside a game's folder the folder can be left out: `polter play`, `polter check`.
+A game is a folder with a *polter.toml* in it, wherever you like (as a Godot project is a folder with *project.godot*). Inside a game's folder the folder can be left out: `polter play`, `polter check`. `polter projects` lists the games it knows; `polter manager` shows them in a window, to open, play, make or add one. `polter --help` lists every command.
 
 ## A game is a value
 
@@ -109,7 +111,7 @@ impl Game for Glow {
 - **Actions** bound to keys, mouse and gamepads, written as text; **text** in Polter's own pixel font, with umlauts, widths and wrapping, or in any BDF font.
 - **Sound** from a small synth (square, triangle, saw, noise), and the **window**: full screen, exactly sixty ticks a second, whole-pixel scaling.
 - **Maths that is the same on every machine** (`polter::math`), and a *clippy.toml* in every new game that names whatever would make it differ.
-- Or the **fantasy console**: 320 × 180 pixels, eight colours from a palette, six buttons; a colour outside the palette doesn't compile.
+- Or the **fantasy console**: 320 × 180 pixels, up to 256 palette slots (sixteen named), six buttons; nothing but a palette slot can be drawn.
 
 ## Built for agents
 
@@ -148,25 +150,27 @@ The example game shows everything at once: **LANTERN**, a lantern carried throug
 ## Docs
 
 - [API.md](API.md): the whole API, the command line, scenarios, the workshop
-- [SPEC.md](SPEC.md): what Polter is meant to become, its principles, milestones and decisions
+- [SPEC.md](SPEC.md): the plan: principles, milestones and what each still needs
 - [CHANGELOG.md](CHANGELOG.md), [CONTRIBUTING.md](CONTRIBUTING.md), [RESEARCH.md](RESEARCH.md)
 
 ## Status
 
-0.5 is a preview: the API will still change. Tested by hand on macOS 12 on an Intel MacBook Air from 2015, with Rust 1.99. The CI builds and checks every change on Windows (x64), Linux (x64) and macOS (ARM): the tests, clippy, rustfmt and the golden frames. On 20 October 2026 all three passed, and LANTERN's 576 frames came out bit for bit the frames recorded on the Intel Mac, light per pixel included. Nobody has played on Windows or Linux yet. Gamepads: a DualShock 4 on that Mac presses all six of the console's buttons, the left stick in all eight directions (`examples/pads`, a person pressing, 20 October 2026); other pads and systems are not yet tried. Phones and tablets come after the computers.
+0.5 is a preview: the API will still change. Tested by hand on macOS 12 on an Intel MacBook Air from 2015, with Rust 1.99. CI builds and checks every change on Windows (x64), Linux (x64) and macOS (ARM): tests, clippy, rustfmt and the golden frames. On 20 October 2026 all three passed, LANTERN's 576 frames bit for bit those recorded on the Intel Mac. Nobody has played on Windows or Linux yet.
 
-`tools/check.sh` is what every change must pass: the tests (`cargo test --workspace`: 131 tests, 10 of them doctests, on 20 October 2026), clippy with warnings as errors, rustfmt, golden frames (every frame of recorded runs, compared bit for bit), and a game fresh from `polter new` through clippy as it is made and as it ships. The pictures on this page come from `tools/page.sh`.
+Gamepads: a DualShock 4 on that Mac presses all six console buttons, the left stick in all eight directions (`examples/pads`, pressed by hand, 20 October 2026). A pad's own buttons, sticks and triggers (since 22 October 2026) are tested with recorded input only. Other pads and systems are untried. Phones and tablets come after the computers.
 
-The window comes from [miniquad](https://crates.io/crates/miniquad) and gamepads from [gilrs](https://crates.io/crates/gilrs) (both MIT or Apache-2.0), the speakers from [cpal](https://crates.io/crates/cpal) (Apache-2.0); everything else is Polter's own, reading and writing PNG and GIF and the fonts included. All 91 crates they bring along, for every system, are under permissive licences (MIT, Apache-2.0, Zlib, ISC, BSD, Unlicense, Unicode-3.0; checked 20 October 2026). A game passed on as a program carries their licence notices.
+`tools/check.sh` is what every change must pass: the tests, clippy with warnings as errors, rustfmt, the golden frames (every frame of recorded runs, compared bit for bit), and a game fresh from `polter new` through clippy as it is made and as it ships. The pictures on this page come from `tools/page.sh`.
+
+The window comes from [miniquad](https://crates.io/crates/miniquad) and gamepads from [gilrs](https://crates.io/crates/gilrs) (both MIT or Apache-2.0), the speakers from [cpal](https://crates.io/crates/cpal) (Apache-2.0); everything else is Polter's own, reading and writing PNG and GIF and the fonts included. Every crate they bring along, for every system, is under a permissive licence (MIT, Apache-2.0, Zlib, ISC, BSD, Unlicense, Unicode-3.0; checked 20 October 2026). A game passed on as a program must carry their licence notices.
 
 
 ## As a Mac app
 
-`sh tools/bundle.sh PACKAGE "Name" ICON.png [--install]` builds a game, makes its icon from a 1024 × 1024 picture (scaled by whole pixels) and writes `Name.app`; `--install` copies it to `~/Applications`. Started from its app, a game opens its window at once.
+`sh tools/bundle.sh PACKAGE "Name" ICON.png [--install]` builds one of the engine's own carts (a package of this workspace, such as `lantern`), makes its icon from a 1024 × 1024 picture (scaled by whole pixels) and writes `target/release/Name.app`; `--install` copies it to `~/Applications`. Started from its app, a game opens its window at once. It needs macOS (`iconutil`). A game in its own folder has no bundle yet: `polter ship FOLDER` builds its program and prints where it is.
 
 ## Who looks after it
 
-Polter is developed and maintained by **BNDR**, a game-building AI agent, for its owner, who has the last word. Issues and pull requests are welcome: BNDR reads them, answers (signed as BNDR) and fixes what it can. It works in sessions, so an answer can take some days. Bugs with a `.haunt` file and a seed are the best kind: they can be replayed exactly. See [CONTRIBUTING.md](CONTRIBUTING.md).
+Polter is developed and maintained by Claude, an AI agent working in Claude Code, for the repository's owner, who has the last word. Claude reviews pull requests and answers issues, signed "— Claude". The work happens in sessions, so an answer can take some days. Issues and pull requests are welcome; bugs with a seed and a `.haunt` file are the best kind, because they replay exactly. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Licence
 

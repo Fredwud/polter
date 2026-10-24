@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        SPEC.md says what Polter is meant to become and what it leaves out on purpose; a look there first saves both of us time.
+        SPEC.md says what Polter is meant to become and what it leaves out on purpose; a look there first saves time.
   - type: textarea
     id: idea
     attributes:

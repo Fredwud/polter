@@ -171,6 +171,60 @@ fn full_recordings_round_trip() {
     }
 }
 
+// ── A gamepad's own buttons, sticks and triggers ─────────────────────────
+
+#[test]
+fn haunt_pad_buttons_sticks_and_triggers_stay_and_round_trip() {
+    use polter::{Input, PadButton, Stick};
+    let h = Haunt::parse(
+        "5-6 pad:south pad:R2\n10 lstick 0.25,-1 r2 0.5\n20 rstick -0.4,0.6 lstick 0,0 l2 1\n",
+    )
+    .unwrap();
+    let south = PadButton::South.bit() | PadButton::R2.bit();
+    assert_eq!((h.frame(5).pad.buttons, h.frame(7).pad.buttons), (south, 0));
+    // a stick and a trigger stay where they were put, beyond the script too
+    assert_eq!(h.frame(9).pad.sticks, [0; 4]);
+    assert_eq!(h.frame(15).pad.sticks, [32, -127, 0, 0]);
+    assert_eq!(h.frame(15).pad.triggers, [0, 128]);
+    assert_eq!(h.frame(500).pad.sticks, [0, 0, -51, 76]);
+    assert_eq!(h.frame(500).pad.triggers, [255, 128]);
+    // the game reads them as they were written, to a step
+    let mut i = Input::default();
+    i.advance(&h.frame(15));
+    let (x, y) = i.stick(Stick::Left);
+    assert!((x - 0.25).abs() < 0.005 && y == -1.0, "{x} {y}");
+    assert!((i.trigger(Stick::Right) - 0.5).abs() < 0.003);
+    i.advance(&h.frame(500));
+    let (x, y) = i.stick(Stick::Right);
+    assert!(
+        (x + 0.4).abs() < 0.005 && (y - 0.6).abs() < 0.005,
+        "{x} {y}"
+    );
+    assert_eq!(i.stick(Stick::Left), (0.0, 0.0));
+    assert_eq!(i.trigger(Stick::Left), 1.0);
+    assert!(Haunt::parse("1 pad:r4").unwrap_err().contains("r4"));
+    assert!(Haunt::parse("1 lstick 1").unwrap_err().contains("X,Y"));
+    assert!(Haunt::parse("1 r2").unwrap_err().contains("0 to 1"));
+    // a recording of every step a stick and a trigger can be at plays back to the bit
+    let frames: Vec<Frame> = (-127i8..=127)
+        .map(|v| Frame {
+            pad: polter::PadFrame {
+                buttons: if v % 3 == 0 { PadButton::L3.bit() } else { 0 },
+                sticks: [v, -v, v / 2, 127],
+                triggers: [
+                    (v as i16 + 127) as u8,
+                    (2 * (v as i16 + 127)).min(255) as u8,
+                ],
+            },
+            ..Frame::default()
+        })
+        .collect();
+    let h = Haunt::parse(&Haunt::write_frames(&frames, false)).unwrap();
+    for (k, f) in frames.iter().enumerate() {
+        assert_eq!(h.frame(k as u64 + 1).pad, f.pad, "frame {}", k + 1);
+    }
+}
+
 #[derive(Default)]
 struct Echo {
     log: Vec<String>,

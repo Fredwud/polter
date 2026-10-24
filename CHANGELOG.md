@@ -2,6 +2,10 @@
 
 What changed, newest first. Until 1.0 a minor version may change the API; from 1.0 on Polter follows semantic versioning.
 
+## Unreleased
+
+- **The whole gamepad** (`input`, `pad`, `haunt`, `action`): a game reads a pad's own 17 buttons (`Input::pad`, named as a DualShock 4 has them, with the Xbox names beside), both sticks and both triggers with their values (`Input::stick`, `Input::trigger`); several pads play as one. They are part of the tick's `Frame`, so they record and replay exactly; `.haunt` files write them as `pad:NAME`, `lstick X,Y`, `rstick X,Y`, `l2 V`, `r2 V`; actions bind `pad:NAME`. `examples/pads` checks all of it with a pad in hand. The console's six buttons come from a pad as before.
+
 ## 0.5.0, 20 October 2026: the first public preview
 
 Everything a small 2D game needs, and the tools an agent needs to make one, proven by an example game made with nothing else ([`carts/lantern`](carts/lantern)).

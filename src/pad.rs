@@ -3,10 +3,14 @@
 
 //! Gamepads press the console's buttons: the pad and the left stick are the directions, the
 //! lower face button is A, the right one B. So a game made for the keyboard plays with a pad as
-//! it is, and what a pad does is recorded and replayed like any other input (the window turns it
-//! into the tick's `Frame`). Read through `gilrs`, with the feature `gamepad` (on by default).
+//! it is. And a game that wants the whole pad reads its own buttons, both sticks and both triggers
+//! (`Input::pad`, `stick`, `trigger`): all of a DualShock 4, the left stick pressed lightly to
+//! walk slowly, as the owner asked on 22 October 2026. What a pad does is recorded
+//! and replayed like any other input (the window turns it into the tick's `Frame`). Read through
+//! `gilrs`, with the feature `gamepad` (on by default). Not through gilrs on a Mac: the touchpad,
+//! the gyro, the light bar and rumble.
 
-use crate::input::Button;
+use crate::input::{Button, PadButton, PadFrame};
 
 /// What a gamepad is doing, as far as the console's buttons care.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -24,6 +28,38 @@ pub struct PadState {
 
 /// How far the stick must lean before it counts as a direction.
 pub const STICK: f32 = 0.4;
+
+/// The console buttons a pad frame presses (the same as `buttons_of` for the state it holds).
+pub fn console_of(p: &PadFrame) -> u8 {
+    let held = |b: PadButton| p.buttons & b.bit() != 0;
+    buttons_of(&PadState {
+        left: held(PadButton::Left),
+        right: held(PadButton::Right),
+        up: held(PadButton::Up),
+        down: held(PadButton::Down),
+        south: held(PadButton::South),
+        east: held(PadButton::East),
+        stick: (p.sticks[0] as f32 / 127.0, p.sticks[1] as f32 / 127.0),
+    })
+}
+
+/// Several pads' states as one: their buttons together, of each stick and trigger the one leant
+/// furthest.
+pub fn together(states: &[PadFrame]) -> PadFrame {
+    let mut all = PadFrame::default();
+    for s in states {
+        all.buttons |= s.buttons;
+        for (a, &v) in all.sticks.iter_mut().zip(&s.sticks) {
+            if v.unsigned_abs() > a.unsigned_abs() {
+                *a = v;
+            }
+        }
+        for (a, &v) in all.triggers.iter_mut().zip(&s.triggers) {
+            *a = (*a).max(v);
+        }
+    }
+    all
+}
 
 /// The console buttons a pad's state presses.
 pub fn buttons_of(s: &PadState) -> u8 {
@@ -69,29 +105,69 @@ impl Pads {
         Vec::new()
     }
 
-    /// The console buttons all pads press together now.
-    pub fn buttons(&mut self) -> u8 {
+    /// What all pads do together now: the console buttons they press, and their own buttons,
+    /// sticks and triggers.
+    pub fn read(&mut self) -> (u8, PadFrame) {
         #[cfg(feature = "gamepad")]
         if let Some(g) = &mut self.gilrs {
             use gilrs::{Axis, Button as B};
-            // the events keep the pads' states up to date
             while g.next_event().is_some() {}
-            return g
+            let own = [
+                (B::South, PadButton::South),
+                (B::East, PadButton::East),
+                (B::West, PadButton::West),
+                (B::North, PadButton::North),
+                (B::LeftTrigger, PadButton::L1),
+                (B::RightTrigger, PadButton::R1),
+                (B::LeftTrigger2, PadButton::L2),
+                (B::RightTrigger2, PadButton::R2),
+                (B::Select, PadButton::Select),
+                (B::Start, PadButton::Start),
+                (B::Mode, PadButton::Mode),
+                (B::LeftThumb, PadButton::L3),
+                (B::RightThumb, PadButton::R3),
+                (B::DPadUp, PadButton::Up),
+                (B::DPadDown, PadButton::Down),
+                (B::DPadLeft, PadButton::Left),
+                (B::DPadRight, PadButton::Right),
+            ];
+            let states: Vec<PadFrame> = g
                 .gamepads()
                 .map(|(_, pad)| {
-                    buttons_of(&PadState {
-                        left: pad.is_pressed(B::DPadLeft),
-                        right: pad.is_pressed(B::DPadRight),
-                        up: pad.is_pressed(B::DPadUp),
-                        down: pad.is_pressed(B::DPadDown),
-                        south: pad.is_pressed(B::South),
-                        east: pad.is_pressed(B::East),
-                        stick: (pad.value(Axis::LeftStickX), pad.value(Axis::LeftStickY)),
-                    })
+                    let buttons = own
+                        .iter()
+                        .filter(|(b, _)| pad.is_pressed(*b))
+                        .fold(0, |m, (_, p)| m | p.bit());
+                    // a trigger is a button with a value, or an axis, as the pad's mapping has it
+                    let trigger = |b: B, a: Axis| {
+                        pad.button_data(b)
+                            .map_or(0.0, |d| d.value())
+                            .max(pad.value(a))
+                    };
+                    PadFrame {
+                        buttons,
+                        sticks: [
+                            PadFrame::step(pad.value(Axis::LeftStickX)),
+                            PadFrame::step(pad.value(Axis::LeftStickY)),
+                            PadFrame::step(pad.value(Axis::RightStickX)),
+                            PadFrame::step(pad.value(Axis::RightStickY)),
+                        ],
+                        triggers: [
+                            PadFrame::trigger_step(trigger(B::LeftTrigger2, Axis::LeftZ)),
+                            PadFrame::trigger_step(trigger(B::RightTrigger2, Axis::RightZ)),
+                        ],
+                    }
                 })
-                .fold(0, |a, b| a | b);
+                .collect();
+            let pad = together(&states);
+            return (console_of(&pad), pad);
         }
-        0
+        (0, PadFrame::default())
+    }
+
+    /// The console buttons all pads press together now.
+    pub fn buttons(&mut self) -> u8 {
+        self.read().0
     }
 }
 
@@ -134,11 +210,71 @@ mod tests {
     }
 
     #[test]
+    fn two_pads_play_as_one_and_a_pad_frame_presses_the_same_console_buttons() {
+        let a = PadFrame {
+            buttons: PadButton::South.bit(),
+            sticks: [100, -20, 0, 5],
+            triggers: [10, 200],
+        };
+        let b = PadFrame {
+            buttons: PadButton::Left.bit(),
+            sticks: [-120, 10, 0, -6],
+            triggers: [40, 0],
+        };
+        let both = together(&[a, b]);
+        assert_eq!(both.buttons, PadButton::South.bit() | PadButton::Left.bit());
+        assert_eq!(
+            both.sticks,
+            [-120, -20, 0, -6],
+            "each the one leant furthest"
+        );
+        assert_eq!(both.triggers, [40, 200]);
+        assert_eq!(together(&[]), PadFrame::default());
+        // the arrows, the left stick past STICK, south and east: as before
+        assert_eq!(console_of(&a), Button::Right.bit() | Button::A.bit());
+        assert_eq!(
+            console_of(&both),
+            Button::Left.bit() | Button::A.bit(),
+            "the stick leans left, and the arrow says left too"
+        );
+        let light = PadFrame {
+            sticks: [PadFrame::step(0.39), PadFrame::step(-0.39), 127, 127],
+            ..PadFrame::default()
+        };
+        assert_eq!(
+            console_of(&light),
+            0,
+            "a light lean and the right stick press nothing"
+        );
+    }
+
+    #[test]
+    fn every_pad_button_has_one_name_and_keeps_its_bit() {
+        let mut names = std::collections::BTreeSet::new();
+        for b in PadButton::ALL {
+            assert!(names.insert(b.name()), "{} named twice", b.name());
+            assert_eq!(PadButton::from_name(&b.name().to_uppercase()), Some(b));
+        }
+        assert_eq!(names.len(), 17);
+        // recordings keep their meaning: new buttons only ever at the end
+        assert_eq!(PadButton::South.bit(), 1);
+        assert_eq!(PadButton::R2.bit(), 1 << 7);
+        assert_eq!(PadButton::Right.bit(), 1 << 16);
+    }
+
+    #[test]
     fn the_pads_answer_with_console_buttons_only() {
         // whatever is plugged in (none, or a pad someone holds), only the six buttons come back
         let all = Button::ALL.iter().fold(0, |a, b| a | b.bit());
         let mut pads = Pads::open();
         assert_eq!(pads.buttons() & !all, 0);
+        let (buttons, pad) = pads.read();
+        assert_eq!(buttons & !all, 0);
+        assert_eq!(
+            buttons,
+            console_of(&pad),
+            "the console buttons are the pad's"
+        );
         let _ = pads.names();
     }
 }

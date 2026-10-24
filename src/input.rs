@@ -1,7 +1,8 @@
 // This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of
 // the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! Input: six console buttons for every cart, plus mouse and keyboard for carts that want them.
+//! Input: six console buttons for every cart, plus mouse, keyboard and a gamepad's own buttons,
+//! sticks and triggers for carts that want them.
 
 /// A button of the console. In the window: arrow keys, Z = A, X = B.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -121,6 +122,110 @@ impl Key {
     }
 }
 
+/// A gamepad's own buttons, beyond the console's six: named as a DualShock 4 has them, with the
+/// Xbox names beside (`.haunt` files and bindings write them `pad:south` …). New ones only ever at
+/// the end, so a recording keeps its meaning.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PadButton {
+    /// Cross (A), circle (B), square (X), triangle (Y).
+    South,
+    East,
+    West,
+    North,
+    /// The shoulder buttons (LB, RB) and the triggers pressed (LT, RT; how far: `Input::trigger`).
+    L1,
+    R1,
+    L2,
+    R2,
+    /// Share (View), Options (Menu), the PS button (Guide).
+    Select,
+    Start,
+    Mode,
+    /// The sticks pressed in.
+    L3,
+    R3,
+    /// The pad's arrows.
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
+impl PadButton {
+    #[rustfmt::skip]
+    pub const ALL: [PadButton; 17] = [
+        PadButton::South, PadButton::East, PadButton::West, PadButton::North,
+        PadButton::L1, PadButton::R1, PadButton::L2, PadButton::R2,
+        PadButton::Select, PadButton::Start, PadButton::Mode, PadButton::L3, PadButton::R3,
+        PadButton::Up, PadButton::Down, PadButton::Left, PadButton::Right,
+    ];
+
+    pub fn bit(self) -> u32 {
+        1 << self as u32
+    }
+
+    /// `south east west north l1 r1 l2 r2 select start mode l3 r3 up down left right`.
+    pub fn name(self) -> &'static str {
+        match self {
+            PadButton::South => "south",
+            PadButton::East => "east",
+            PadButton::West => "west",
+            PadButton::North => "north",
+            PadButton::L1 => "l1",
+            PadButton::R1 => "r1",
+            PadButton::L2 => "l2",
+            PadButton::R2 => "r2",
+            PadButton::Select => "select",
+            PadButton::Start => "start",
+            PadButton::Mode => "mode",
+            PadButton::L3 => "l3",
+            PadButton::R3 => "r3",
+            PadButton::Up => "up",
+            PadButton::Down => "down",
+            PadButton::Left => "left",
+            PadButton::Right => "right",
+        }
+    }
+
+    pub fn from_name(s: &str) -> Option<PadButton> {
+        PadButton::ALL
+            .into_iter()
+            .find(|b| b.name().eq_ignore_ascii_case(s))
+    }
+}
+
+/// A gamepad's stick.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stick {
+    Left,
+    Right,
+}
+
+/// What a gamepad does in a frame, beyond the console's buttons: its own buttons, both sticks and
+/// both triggers. The analogue values are kept in steps of 1/127 (sticks) and 1/255 (triggers),
+/// so a recording plays back to the bit.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PadFrame {
+    /// Held pad buttons (`PadButton::bit()` values).
+    pub buttons: u32,
+    /// The left stick's x and y, the right stick's x and y (right and up positive, -127 to 127).
+    pub sticks: [i8; 4],
+    /// The left and the right trigger (0 to 255).
+    pub triggers: [u8; 2],
+}
+
+impl PadFrame {
+    /// A stick's value kept as a step.
+    pub fn step(v: f32) -> i8 {
+        (v.clamp(-1.0, 1.0) * 127.0).round() as i8
+    }
+
+    /// A trigger's value kept as a step.
+    pub fn trigger_step(v: f32) -> u8 {
+        (v.clamp(0.0, 1.0) * 255.0).round() as u8
+    }
+}
+
 /// Mouse button bits.
 pub struct Mouse;
 
@@ -143,6 +248,8 @@ pub struct Frame {
     pub wheel: i32,
     /// Held keys (`Key::bit()` values).
     pub keys: u64,
+    /// A gamepad's own buttons, sticks and triggers.
+    pub pad: PadFrame,
 }
 
 impl Frame {
@@ -226,6 +333,37 @@ impl Input {
     /// A key went up this frame.
     pub fn key_released(&self, k: Key) -> bool {
         !self.key(k) && self.before.keys & k.bit() != 0
+    }
+
+    /// A gamepad's own button is down this frame.
+    pub fn pad(&self, b: PadButton) -> bool {
+        self.now.pad.buttons & b.bit() != 0
+    }
+
+    /// A gamepad's own button went down this frame.
+    pub fn pad_pressed(&self, b: PadButton) -> bool {
+        self.pad(b) && self.before.pad.buttons & b.bit() == 0
+    }
+
+    /// A gamepad's own button went up this frame.
+    pub fn pad_released(&self, b: PadButton) -> bool {
+        !self.pad(b) && self.before.pad.buttons & b.bit() != 0
+    }
+
+    /// Where a stick leans: x right, y up, each from -1 to 1 (raw, without a dead zone: a game
+    /// chooses its own; a pad at rest reads a little off centre).
+    pub fn stick(&self, s: Stick) -> (f32, f32) {
+        let k = match s {
+            Stick::Left => 0,
+            Stick::Right => 2,
+        };
+        let v = self.now.pad.sticks;
+        (v[k] as f32 / 127.0, v[k + 1] as f32 / 127.0)
+    }
+
+    /// How far a trigger is pressed, 0 to 1 (`Stick::Left` for L2, `Stick::Right` for R2).
+    pub fn trigger(&self, side: Stick) -> f32 {
+        self.now.pad.triggers[side as usize] as f32 / 255.0
     }
 
     /// The next frame's input: what was held becomes "before", so `pressed` and `released` see

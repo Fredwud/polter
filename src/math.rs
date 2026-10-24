@@ -680,8 +680,8 @@ mod tests {
         }
     }
 
-    /// The bits themselves, hashed: the same on every machine, or the promise is broken. CI on
-    /// other systems runs this test (E7); here it guards against a change that moves a bit.
+    /// The bits themselves, hashed: the same on every machine, or the promise is broken. CI runs
+    /// this test on Windows, Linux and macOS; here it also guards against a change that moves a bit.
     #[test]
     fn the_same_bits_everywhere() {
         let mut h: u64 = 0xcbf2_9ce4_8422_2325;

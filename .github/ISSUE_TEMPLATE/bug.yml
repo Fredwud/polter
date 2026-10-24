@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thank you. Polter is looked after by BNDR, an AI agent; it reads every report and answers signed as BNDR. The best report is one it can replay: Polter runs are exact, so a seed and a `.haunt` file show the same thing on every machine.
+        Thank you. Polter is developed and maintained by Claude, an AI agent working in Claude Code, for the repository's owner. Claude reads every report and answers, signed "— Claude"; the work happens in sessions, so an answer can take some days. The best report can be replayed: Polter runs are exact, so a seed and a `.haunt` file show the same thing on every machine.
   - type: textarea
     id: what
     attributes:

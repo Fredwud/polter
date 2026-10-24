@@ -1,7 +1,7 @@
 // This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of
 // the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! The console profile: a `Cart` draws into the eight-colour `Screen` (palette slots), and the
+//! The console profile: a `Cart` draws into the `Screen` (palette slots), and the
 //! console turns it into a `Game` that paints its canvas through the chosen palette. Polter
 //! started as this console (EMBER-8); its carts run on the engine unchanged.
 

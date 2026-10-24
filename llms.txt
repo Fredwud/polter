@@ -4,23 +4,30 @@
 
 Start here if you are an agent and have never seen Polter. A game is a folder anywhere, with a *polter.toml*; the `polter` program makes, builds and runs it. The picture is computed on the CPU, so every check can look at exact pixels without a window.
 
+Getting the `polter` program, in a fresh shell (Rust stable; on Linux also `libasound2-dev libudev-dev pkg-config`):
+
+    git clone https://github.com/Fredwud/polter && cd polter
+    cargo build --release -p polter-dev
+    export PATH="$PWD/target/release:$PATH"
+    polter new ~/my-game
+
+`polter new FOLDER` makes a game that runs and passes its first scenario; `polter ship FOLDER` builds what a player gets, without the tools; `polter --help` lists every command. In a new shell, run the `export` line again from the clone (or call `target/release/polter` by its full path).
+
 The loop that works:
 
 1. `polter brief FOLDER`: one page about the game, measured now (what it is meant to be, its state, rules, knobs, scenarios and whether they pass, the person's marks, recent changes). Read it first.
 2. Read API.md whole before you write code: it is small enough.
 3. Change the code; then `polter check FOLDER` (panics with file:line, broken rules) and `polter assert FOLDER --scenarios scenarios`.
 4. Look at what you made: `polter peek FOLDER` writes frames and a contact sheet as PNG; `polter listen FOLDER` writes the sound as WAV and a picture; `polter clip FOLDER` writes the run as an animated GIF for a web page.
-5. The person plays and tunes in `polter workshop FOLDER`; you share its folder (`.polter/workshop`: `commands.txt`, `events.log`, `marks/`, `knobs.txt`).
+5. The person plays and tunes in `polter workshop FOLDER`; you share its folder (`FOLDER/.polter/workshop`: `commands.txt`, `events.log`, `marks/`, `knobs.txt`).
 
 Rules for game code: all logic in `update` (`draw` gets `&self`); randomness only from `ctx.rng`; `polter::math` instead of the platform's `sin`, `exp`, `powf`; `BTreeMap` instead of `HashMap`; everything that matters in `state()`; what must always hold in `invariants()`. A new game's *clippy.toml* warns about the rest.
-
-The `polter` program is built with `cargo build --release -p polter-dev` in this folder and lands in `target/release/polter`. `polter new FOLDER` makes a game that runs and passes its first scenario; `polter ship FOLDER` builds what a player gets, without the tools.
 
 ## Docs
 
 - [API.md](API.md): the whole API, a cart and a true-colour game, the command line, scenarios, the workshop
-- [README.md](README.md): what Polter is today, how to build it, what its tests cover
-- [SPEC.md](SPEC.md): what Polter is meant to become, its principles and milestones, and the decisions made so far
+- [README.md](README.md): what Polter is today, how to build it, what its checks cover
+- [SPEC.md](SPEC.md): the plan: principles, milestones and what each still needs
 
 ## Examples
 

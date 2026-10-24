@@ -92,6 +92,20 @@ fn the_docs_links_lead_somewhere() {
 }
 
 #[test]
+fn the_api_counts_what_the_code_has() {
+    // numbers in API.md bound to the code (it once said 43 keys when there were 62)
+    let Ok(api) = std::fs::read_to_string(root().join("API.md")) else {
+        return;
+    };
+    for said in [
+        format!("{} keys", polter::Key::ALL.len()),
+        format!("{} buttons of its own", polter::PadButton::ALL.len()),
+    ] {
+        assert!(api.contains(&said), "API.md should say {said:?}");
+    }
+}
+
+#[test]
 fn the_readme_shows_the_example_as_it_is() {
     // as checked out: on Windows git may have turned every line's end into \r\n
     let read = |path: &str| {

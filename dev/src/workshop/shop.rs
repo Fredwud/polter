@@ -9,7 +9,7 @@
 use super::look::{self, Content, Layout};
 use super::{Bench, Desk, Resume};
 use polter::canvas::Canvas;
-use polter::input::{Button, Frame, Input, Key, Mouse};
+use polter::input::{Button, Frame, Input, Key, Mouse, PadButton};
 use polter::window::{Host, Io};
 use std::path::PathBuf;
 use std::time::{Instant, SystemTime};
@@ -538,6 +538,7 @@ impl Workshop {
             mouse_buttons: if inside { io.frame.mouse_buttons } else { 0 },
             wheel: if inside { io.frame.wheel } else { 0 },
             keys,
+            pad: io.frame.pad,
         };
         let pressed = Key::ALL
             .iter()
@@ -546,7 +547,8 @@ impl Workshop {
             // a gamepad's button pressed now (the window's input holds the pads' buttons)
             || Button::ALL
                 .iter()
-                .any(|b| io.frame.buttons & b.bit() != 0 && io.input.pressed(*b));
+                .any(|b| io.frame.buttons & b.bit() != 0 && io.input.pressed(*b))
+            || PadButton::ALL.iter().any(|b| io.input.pad_pressed(*b));
         (frame, pressed)
     }
 

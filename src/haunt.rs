@@ -13,12 +13,15 @@
 //! 61          rclick                  # right (also: click, mclick)
 //! 62          wheel+1                 # wheel steps (wheel-2 …)
 //! 70-72       key:r key:shift         # keyboard keys
+//! 80-90       pad:south pad:l1        # a gamepad's own buttons (south east west north l1 r1 l2 r2
+//!                                     # select start mode l3 r3 up down left right)
+//! 80          lstick 0.5,-0.25 r2 0.8 # its sticks (x right, y up) and triggers, from this frame on
 //! ```
 //!
 //! Frame numbers are the frames the cart sees (the first frame is 1). Everything not listed for a
-//! frame is up; the cursor stays where it was last put.
+//! frame is up; the cursor, the sticks and the triggers stay where they were last put.
 
-use crate::input::{Button, Frame, Key, Mouse};
+use crate::input::{Button, Frame, Key, Mouse, PadButton, PadFrame};
 
 #[derive(Clone, Debug, PartialEq)]
 enum Act {
@@ -28,6 +31,9 @@ enum Act {
     Move((i32, i32), (i32, i32)),
     Wheel(i32),
     Keys(u64),
+    PadButtons(u32),
+    /// A stick (0 left, 1 right) or a trigger (2 left, 3 right) put somewhere, from this frame on.
+    Lean(usize, i8, i8),
 }
 
 /// A parsed script, expanded into one `Frame` per frame for fast replay.
@@ -57,6 +63,11 @@ fn act(word: &str) -> Result<Act, String> {
             .map(|k| Act::Keys(k.bit()))
             .ok_or(format!("unknown key {k:?}"));
     }
+    if let Some(b) = word.strip_prefix("pad:") {
+        return PadButton::from_name(b)
+            .map(|b| Act::PadButtons(b.bit()))
+            .ok_or(format!("unknown pad button {b:?}"));
+    }
     if let Some(n) = word.strip_prefix("wheel") {
         return n
             .parse::<i32>()
@@ -64,7 +75,7 @@ fn act(word: &str) -> Result<Act, String> {
             .map_err(|_| format!("wheel needs a number like wheel+1, got {word:?}"));
     }
     Err(format!(
-        "unknown input {word:?} (buttons left right up down a b, click rclick mclick, mouse X,Y, move X,Y>X,Y, wheel+N, key:NAME)"
+        "unknown input {word:?} (buttons left right up down a b, click rclick mclick, mouse X,Y, move X,Y>X,Y, wheel+N, key:NAME, pad:NAME, lstick X,Y, rstick X,Y, l2 V, r2 V)"
     ))
 }
 
@@ -114,6 +125,25 @@ impl Haunt {
                         };
                         acts.push(Act::Move(a, b));
                     }
+                    "lstick" | "rstick" => {
+                        let (x, y) = words
+                            .next()
+                            .and_then(|a| a.split_once(','))
+                            .and_then(|(x, y)| {
+                                Some((x.parse::<f32>().ok()?, y.parse::<f32>().ok()?))
+                            })
+                            .ok_or_else(|| err(format!("{w} needs X,Y")))?;
+                        let which = usize::from(w == "rstick");
+                        acts.push(Act::Lean(which, PadFrame::step(x), PadFrame::step(y)));
+                    }
+                    "l2" | "r2" => {
+                        let v = words
+                            .next()
+                            .and_then(|v| v.parse::<f32>().ok())
+                            .ok_or_else(|| err(format!("{w} needs a value from 0 to 1")))?;
+                        let which = 2 + usize::from(w == "r2");
+                        acts.push(Act::Lean(which, PadFrame::trigger_step(v) as i8, 0));
+                    }
                     w => acts.push(act(w).map_err(err)?),
                 }
             }
@@ -126,6 +156,8 @@ impl Haunt {
         let last = spans.iter().map(|s| s.1).max().unwrap_or(0) as usize;
         let mut frames = vec![Frame::default(); last + 1];
         let mut cursor: Vec<Option<(i32, i32)>> = vec![None; last + 1];
+        // the sticks' and triggers' places, where a frame puts them
+        let mut leans: Vec<[Option<(i8, i8)>; 4]> = vec![[None; 4]; last + 1];
         let mut has_mouse = false;
         for (from, to, acts) in spans {
             for f in *from as usize..=*to as usize {
@@ -135,6 +167,8 @@ impl Haunt {
                         Act::Buttons(b) => fr.buttons |= b,
                         Act::MouseButtons(b) => fr.mouse_buttons |= b,
                         Act::Keys(k) => fr.keys |= k,
+                        Act::PadButtons(b) => fr.pad.buttons |= b,
+                        Act::Lean(which, x, y) => leans[f][which] = Some((x, y)),
                         Act::Wheel(n) => fr.wheel += n,
                         Act::At(x, y) => {
                             cursor[f] = Some((x, y));
@@ -152,13 +186,22 @@ impl Haunt {
                 }
             }
         }
-        // The cursor stays where it was last put.
+        // The cursor, the sticks and the triggers stay where they were last put.
         let mut at = (0, 0);
+        let mut lean = [(0i8, 0i8); 4];
         for f in 0..=last {
             if let Some(p) = cursor[f] {
                 at = p;
             }
             frames[f].mouse = at;
+            for (k, l) in leans[f].iter().enumerate() {
+                if let Some(v) = l {
+                    lean[k] = *v;
+                }
+            }
+            let pad = &mut frames[f].pad;
+            pad.sticks = [lean[0].0, lean[0].1, lean[1].0, lean[1].1];
+            pad.triggers = [lean[2].0 as u8, lean[3].0 as u8];
         }
         Haunt { frames, has_mouse }
     }
@@ -172,10 +215,17 @@ impl Haunt {
     pub fn frame(&self, frame: u64) -> Frame {
         match self.frames.get(frame as usize) {
             Some(f) => *f,
-            None => Frame {
-                mouse: self.frames.last().map_or((0, 0), |f| f.mouse),
-                ..Frame::default()
-            },
+            None => {
+                let last = self.frames.last().copied().unwrap_or_default();
+                Frame {
+                    mouse: last.mouse,
+                    pad: PadFrame {
+                        buttons: 0,
+                        ..last.pad
+                    },
+                    ..Frame::default()
+                }
+            }
         }
     }
 
@@ -200,7 +250,7 @@ impl Haunt {
     pub fn write_frames(frames: &[Frame], mouse: bool) -> String {
         let mut out =
             String::from("# Recorded with Polter. Frame numbers are the frames the cart saw.\n");
-        let held = |f: &Frame| (f.buttons, f.mouse_buttons, f.keys);
+        let held = |f: &Frame| (f.buttons, f.mouse_buttons, f.keys, f.pad.buttons);
         let mut lines: Vec<(usize, String)> = Vec::new();
         let mut i = 0;
         while i < frames.len() {
@@ -209,7 +259,7 @@ impl Haunt {
                 j += 1;
             }
             let f = &frames[i];
-            if held(f) != (0, 0, 0) {
+            if held(f) != (0, 0, 0, 0) {
                 let mut words: Vec<String> = Button::names(f.buttons)
                     .into_iter()
                     .map(String::from)
@@ -229,6 +279,12 @@ impl Haunt {
                         .filter(|k| f.keys & k.bit() != 0)
                         .map(|k| format!("key:{}", k.name())),
                 );
+                words.extend(
+                    PadButton::ALL
+                        .into_iter()
+                        .filter(|b| f.pad.buttons & b.bit() != 0)
+                        .map(|b| format!("pad:{}", b.name())),
+                );
                 let span = if i == j {
                     format!("{}", i + 1)
                 } else {
@@ -241,6 +297,31 @@ impl Haunt {
         for (k, f) in frames.iter().enumerate() {
             if f.wheel != 0 {
                 lines.push((k, format!("{:<10} wheel{:+}", k + 1, f.wheel)));
+            }
+            // the sticks and triggers where they change (three decimals bring every step back)
+            let before = if k == 0 {
+                PadFrame::default()
+            } else {
+                frames[k - 1].pad
+            };
+            let mut leans = Vec::new();
+            for (s, name) in [(0, "lstick"), (2, "rstick")] {
+                let (x, y) = (f.pad.sticks[s], f.pad.sticks[s + 1]);
+                if (x, y) != (before.sticks[s], before.sticks[s + 1]) {
+                    leans.push(format!(
+                        "{name} {:.3},{:.3}",
+                        x as f32 / 127.0,
+                        y as f32 / 127.0
+                    ));
+                }
+            }
+            for (t, name) in [(0, "l2"), (1, "r2")] {
+                if f.pad.triggers[t] != before.triggers[t] {
+                    leans.push(format!("{name} {:.3}", f.pad.triggers[t] as f32 / 255.0));
+                }
+            }
+            if !leans.is_empty() {
+                lines.push((k, format!("{:<10} {}", k + 1, leans.join(" "))));
             }
             if mouse && (k == 0 || f.mouse != frames[k - 1].mouse) {
                 lines.push((

@@ -422,12 +422,14 @@ impl EventHandler for Stage {
         let my = ((self.mouse_px.1 - oy) / s as f32).clamp(0.0, ch as f32 - 1.0) as i32;
         let steps = self.wheel.trunc();
         self.wheel -= steps;
+        let (buttons, pad) = self.pads.read();
         let frame = Frame {
-            buttons: self.pads.buttons(),
+            buttons,
             mouse: (mx, my),
             mouse_buttons: self.mouse_buttons,
             wheel: steps as i32,
             keys: self.keys,
+            pad,
         };
         self.input.advance(&frame);
         let io = Io {

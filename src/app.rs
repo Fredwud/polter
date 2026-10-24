@@ -126,6 +126,7 @@ impl Host for Player {
                     0
                 },
                 keys: io.frame.keys,
+                pad: io.frame.pad,
             };
             let input = self.along.input(self.session.ctx.frame + 1, from_player);
             // only the last tick is shown, so only it need be painted (`Ctx::picture`)

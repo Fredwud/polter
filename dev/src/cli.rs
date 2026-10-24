@@ -1224,6 +1224,16 @@ impl polter::app::Along for PlayAlong {
             mouse_buttons: from_player.mouse_buttons | scripted.mouse_buttons,
             wheel: from_player.wheel + scripted.wheel,
             keys: from_player.keys | scripted.keys,
+            // the pad's buttons together; its sticks and triggers the script's where it moves them
+            pad: polter::PadFrame {
+                buttons: from_player.pad.buttons | scripted.pad.buttons,
+                sticks: if scripted.pad.sticks == [0; 4] {
+                    from_player.pad.sticks
+                } else {
+                    scripted.pad.sticks
+                },
+                triggers: [0, 1].map(|i| from_player.pad.triggers[i].max(scripted.pad.triggers[i])),
+            },
         }
     }
 
