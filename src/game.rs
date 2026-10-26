@@ -6,7 +6,7 @@
 //! every tick. A `Session` runs a game, with a window or without one; every command of the
 //! command line (cli.rs) is a session.
 
-use crate::audio::{Play, SAMPLES_PER_FRAME, Sample, Sfx, Synth};
+use crate::audio::{Play, Room, SAMPLES_PER_FRAME, Sample, Sfx, Synth};
 use crate::canvas::Canvas;
 use crate::input::{Frame, Input};
 use crate::rng::Rng;
@@ -32,6 +32,10 @@ pub struct Ctx {
     /// should still run whatever drawing can fail. The window, `twin` and `peek` look at every
     /// picture they show.
     pub picture: bool,
+    /// The room the listener stands in: every recording sent into it (`Play::room`) echoes
+    /// there, so sounds from many places share one space. It stays until changed; `Room::NONE`
+    /// at the start.
+    pub room: Room,
     pub(crate) sounds: Vec<Sfx>,
     pub(crate) plays: Vec<Play>,
     pub(crate) hums: Vec<(&'static str, Play)>,
@@ -45,6 +49,7 @@ impl Ctx {
             rng: Rng::new(seed),
             storage: Storage::memory(),
             picture: true,
+            room: Room::NONE,
             sounds: Vec::new(),
             plays: Vec::new(),
             hums: Vec::new(),
@@ -340,6 +345,7 @@ impl Session {
                 self.synth.start(play.clone());
             }
             self.synth.hold(&hums);
+            self.synth.room(self.ctx.room);
             self.audio.resize(SAMPLES_PER_FRAME * 2, 0.0);
             self.synth.render(&mut self.audio);
         }

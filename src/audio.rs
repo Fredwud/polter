@@ -25,6 +25,31 @@ const EDGE_IN: f64 = 64.0;
 const EDGE_OUT: f64 = 256.0;
 /// A `Play::cutoff` at or above this keeps every pitch: the recording sounds as it was made.
 pub const OPEN: f32 = 20_000.0;
+/// The room's echo: sixteen delay lines feeding back into one another through a Hadamard
+/// matrix (a feedback delay network). Their lengths are spread from one to three times the time
+/// between two reflections, and each sways a little, slowly and at its own pace, so a humming
+/// sound does not settle on a few of the room's resonances, which would ring and lean the echo
+/// to one side.
+const LINES: usize = 16;
+/// How far a line's length sways (samples, about 0.2 ms), and how fast each sways (Hz).
+const SWAY: f32 = 9.0;
+const SWAY_HZ: f32 = 0.13;
+/// Two allpasses smear what is sent into the room before it reaches the lines (about 4.8 and
+/// 3.6 ms), so a click echoes as a burst, not as a flutter of copies.
+const DIFFUSERS: [usize; 2] = [211, 157];
+const DIFFUSION: f32 = 0.62;
+/// Which rows of the Hadamard matrix say how what is sent reaches the lines, and how each side
+/// hears them: none is the row that all lines share (heard on one side only, it would lean the
+/// echo to that side), and no two are alike, so left and right hear the room apart.
+const INJECT_ROW: usize = 9;
+const LEFT_ROW: usize = 6;
+const RIGHT_ROW: usize = 13;
+/// How much is sent in and heard: in a room of 0.7 s, a steady sound sent in whole echoes about
+/// as loud as itself.
+const INJECT: f32 = 0.25;
+const ECHO_OUT: f32 = 0.65;
+/// Below this a value in the echo is silence (numbers this small are slow to compute with).
+const SILENT: f32 = 1e-12;
 
 /// The shape of a tone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -280,10 +305,13 @@ pub struct Play {
     pub pan: f32,
     /// The highest pitch it keeps, in Hz, as through a wall or a closed door (`OPEN` keeps all).
     pub cutoff: f32,
+    /// How much of it reaches the room's echo (`Room`), 0.0 to 1.0: a sound far off is heard
+    /// mostly through the room, one close by mostly as it is.
+    pub room: f32,
 }
 
 impl Play {
-    /// As recorded, in the middle, at a volume.
+    /// As recorded, in the middle, at a volume, dry.
     pub fn new(sample: &Sample, volume: f32) -> Play {
         Play {
             sample: sample.clone(),
@@ -291,6 +319,7 @@ impl Play {
             rate: 1.0,
             pan: 0.0,
             cutoff: OPEN,
+            room: 0.0,
         }
     }
 
@@ -306,6 +335,11 @@ impl Play {
 
     pub fn cutoff(&mut self, hz: f32) -> &mut Play {
         self.cutoff = hz;
+        self
+    }
+
+    pub fn room(&mut self, send: f32) -> &mut Play {
+        self.room = send.clamp(0.0, 1.0);
         self
     }
 
@@ -363,6 +397,195 @@ impl Dull {
             s[1] += (s[0] - s[1]) * self.k;
         }
         (self.left[1], self.right[1])
+    }
+}
+
+/// The room the listener stands in, whose echo every recording sent into it shares
+/// (`Play::room`): it glues sounds from many places into one space. `Room::NONE`, the default,
+/// echoes nothing.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Room {
+    /// Seconds for the echo to fall by 60 dB (0.0: no room).
+    pub decay: f32,
+    /// The way between two reflections, in metres: about four times the room's volume over its
+    /// surface; 2 to 4 m for a small room, 10 or more for a hall. A new size starts the echo
+    /// afresh, so set it once per room.
+    pub size: f32,
+    /// Above this pitch (Hz) the walls give back less, so the echo darkens as it dies.
+    pub damping: f32,
+}
+
+impl Room {
+    /// No room: nothing echoes.
+    pub const NONE: Room = Room {
+        decay: 0.0,
+        size: 3.0,
+        damping: 5_000.0,
+    };
+}
+
+impl Default for Room {
+    fn default() -> Room {
+        Room::NONE
+    }
+}
+
+/// The sign of a Hadamard matrix's entry: +1 or -1, as its row and column share an even or an
+/// odd number of bits.
+const fn hadamard(row: usize, i: usize) -> f32 {
+    if (row & i).count_ones().is_multiple_of(2) {
+        1.0
+    } else {
+        -1.0
+    }
+}
+
+/// The room's echo as it rings: the delay lines and where each is written, their lengths, their
+/// feedback, their darkening, how far each has swayed, and the allpasses before them.
+#[derive(Clone, Debug)]
+struct Echo {
+    room: Room,
+    lines: [Vec<f32>; LINES],
+    at: [usize; LINES],
+    length: [f32; LINES],
+    gain: [f32; LINES],
+    damp: f32,
+    low: [f32; LINES],
+    /// Each line's sway as a turning hand (cosine and sine), and its turn per sample.
+    sway: [(f32, f32); LINES],
+    turn: [(f32, f32); LINES],
+    diffusers: [Vec<f32>; 2],
+    diffuse_at: [usize; 2],
+}
+
+/// A value of the echo, or silence once it is too small to matter.
+fn audible(v: f32) -> f32 {
+    if v.abs() < SILENT { 0.0 } else { v }
+}
+
+impl Echo {
+    fn new() -> Echo {
+        let mut echo = Echo {
+            room: Room::NONE,
+            lines: std::array::from_fn(|_| Vec::new()),
+            at: [0; LINES],
+            length: [0.0; LINES],
+            gain: [0.0; LINES],
+            damp: 1.0,
+            low: [0.0; LINES],
+            sway: std::array::from_fn(|i| {
+                let (s, c) = crate::math::sin_cos(std::f32::consts::TAU * i as f32 / LINES as f32);
+                (c, s)
+            }),
+            turn: std::array::from_fn(|i| {
+                // each line at its own pace, from 0.13 to about 0.5 Hz
+                let hz = SWAY_HZ * (1.0 + 0.19 * i as f32);
+                let (s, c) = crate::math::sin_cos(std::f32::consts::TAU * hz / SAMPLE_RATE as f32);
+                (c, s)
+            }),
+            diffusers: [vec![0.0; DIFFUSERS[0]], vec![0.0; DIFFUSERS[1]]],
+            diffuse_at: [0; 2],
+        };
+        echo.size(Room::NONE.size);
+        echo
+    }
+
+    /// The lines' lengths for a room of this size, from one to three times the time between two
+    /// reflections; they start silent.
+    fn size(&mut self, size: f32) {
+        let reflection = size.max(0.5) / 343.0 * SAMPLE_RATE as f32;
+        for i in 0..LINES {
+            let spread = crate::math::pow(3.0, i as f32 / (LINES - 1) as f32);
+            self.length[i] = (reflection * spread).max(SWAY + 4.0);
+            self.lines[i] = vec![0.0; self.length[i] as usize + SWAY as usize + 4];
+        }
+        self.at = [0; LINES];
+        self.low = [0.0; LINES];
+    }
+
+    /// Takes on a room: its size sets the lines' lengths, its decay their feedback, its damping
+    /// how fast the high pitches go.
+    fn set(&mut self, room: Room) {
+        if room == self.room {
+            return;
+        }
+        if room.size != self.room.size {
+            self.size(room.size);
+        }
+        self.room = room;
+        for (gain, length) in self.gain.iter_mut().zip(self.length) {
+            // a pass through a line of n samples loses 60 dB * n / (decay * rate)
+            *gain = if room.decay > 0.0 {
+                crate::math::pow(10.0, -3.0 * length / (room.decay * SAMPLE_RATE as f32))
+            } else {
+                0.0
+            };
+        }
+        self.damp = 1.0
+            - crate::math::exp(
+                -std::f32::consts::TAU * room.damping.max(100.0) / SAMPLE_RATE as f32,
+            );
+    }
+
+    /// One sample of what the recordings send into the room; the echo heard left and right.
+    fn pass(&mut self, input: f32) -> (f32, f32) {
+        let mut x = input;
+        for (d, at) in self.diffusers.iter_mut().zip(&mut self.diffuse_at) {
+            let y = d[*at] - DIFFUSION * x;
+            d[*at] = audible(x + DIFFUSION * y);
+            *at = (*at + 1) % d.len();
+            x = y;
+        }
+        if self.room.decay <= 0.0 {
+            x = 0.0; // no room: nothing goes in, and what rings dies out
+        }
+        let (mut left, mut right) = (0.0, 0.0);
+        for i in 0..LINES {
+            // the line's length now: swayed, read between two samples
+            let (c, s) = self.sway[i];
+            let (tc, ts) = self.turn[i];
+            let (c, s) = (c * tc - s * ts, s * tc + c * ts);
+            let keep = 1.5 - 0.5 * (c * c + s * s); // the hand keeps its length
+            self.sway[i] = (c * keep, s * keep);
+            let delay = self.length[i] - SWAY * 0.5 * (1.0 + s);
+            let line = &self.lines[i];
+            let back = self.at[i] as f32 - delay;
+            let back = if back < 0.0 {
+                back + line.len() as f32
+            } else {
+                back
+            };
+            let k = back as usize;
+            let t = back - k as f32;
+            let out = line[k] + (line[(k + 1) % line.len()] - line[k]) * t;
+            self.low[i] = audible(self.low[i] + (out - self.low[i]) * self.damp);
+            left += self.low[i] * hadamard(LEFT_ROW, i);
+            right += self.low[i] * hadamard(RIGHT_ROW, i);
+        }
+        // every line feeds every other, with signs (a Hadamard matrix, kept at equal energy)
+        let mut back = self.low;
+        let mut half = 1;
+        while half < LINES {
+            for i in (0..LINES).step_by(2 * half) {
+                for j in i..i + half {
+                    let (a, b) = (back[j], back[j + half]);
+                    back[j] = a + b;
+                    back[j + half] = a - b;
+                }
+            }
+            half *= 2;
+        }
+        for (i, ((line, at), (fed, gain))) in self
+            .lines
+            .iter_mut()
+            .zip(self.at.iter_mut())
+            .zip(back.iter().zip(self.gain))
+            .enumerate()
+        {
+            line[*at] = audible(fed * 0.25 * gain + x * INJECT * hadamard(INJECT_ROW, i));
+            *at = (*at + 1) % line.len();
+        }
+        (left * ECHO_OUT, right * ECHO_OUT)
     }
 }
 
@@ -460,10 +683,12 @@ struct Held {
     rate: f32,
     gains: (f32, f32),
     dull: Dull,
+    room: f32,
     goal_volume: f32,
     goal_rate: f32,
     goal_gains: (f32, f32),
     goal_dull: f32,
+    goal_room: f32,
     asked: bool,
 }
 
@@ -513,6 +738,7 @@ pub struct Synth {
     triggered: u64,
     players: Vec<Player>,
     held: Vec<Held>,
+    echo: Echo,
 }
 
 impl Default for Synth {
@@ -529,7 +755,13 @@ impl Synth {
             triggered: 0,
             players: Vec::new(),
             held: Vec::new(),
+            echo: Echo::new(),
         }
+    }
+
+    /// The room the listener stands in from now on (`Room::NONE`: none).
+    pub fn room(&mut self, room: Room) {
+        self.echo.set(room);
     }
 
     /// Starts a recording once. When sixteen are playing, the quietest gives way.
@@ -575,6 +807,7 @@ impl Synth {
                 h.goal_rate = play.rate;
                 h.goal_gains = play.gains();
                 h.goal_dull = play.dullness();
+                h.goal_room = play.room;
             } else if self.held.len() < LOOPS && play.sample.len() > 1 {
                 self.held.push(Held {
                     key,
@@ -585,10 +818,12 @@ impl Synth {
                     rate: play.rate,
                     gains: play.gains(),
                     dull: Dull::new(play.dullness()),
+                    room: play.room,
                     goal_volume: play.volume,
                     goal_rate: play.rate,
                     goal_gains: play.gains(),
                     goal_dull: play.dullness(),
+                    goal_room: play.room,
                     asked: true,
                 });
             }
@@ -685,6 +920,7 @@ impl Synth {
                 self.voices[k] = Some(v);
             }
             let (mut left, mut right) = (mix, mix);
+            let mut send = 0.0;
             for p in &mut self.players {
                 let len = p.play.sample.len() as f64;
                 let edge = (p.pos / EDGE_IN)
@@ -694,6 +930,7 @@ impl Synth {
                 let k = p.play.volume * edge;
                 left += l * p.gains.0 * k;
                 right += r * p.gains.1 * k;
+                send += (l * p.gains.0 + r * p.gains.1) * 0.5 * k * p.play.room;
                 p.pos += p.play.rate.max(0.0) as f64;
             }
             for h in &mut self.held {
@@ -705,9 +942,11 @@ impl Synth {
                     glide(h.gains.1, h.goal_gains.1),
                 );
                 h.dull.k = glide(h.dull.k, h.goal_dull);
+                h.room = glide(h.room, h.goal_room);
                 let (l, r) = h.dull.pass(h.sample.looped(h.pos, h.wrapped));
                 left += l * h.gains.0 * h.volume;
                 right += r * h.gains.1 * h.volume;
+                send += (l * h.gains.0 + r * h.gains.1) * 0.5 * h.volume * h.room;
                 h.pos += h.rate.max(0.0) as f64;
                 let (_, len) = h.sample.seam();
                 if h.pos >= len {
@@ -715,8 +954,9 @@ impl Synth {
                     h.wrapped = true;
                 }
             }
-            pair[0] = limit(left);
-            pair[1] = limit(right);
+            let (el, er) = self.echo.pass(send);
+            pair[0] = limit(left + el);
+            pair[1] = limit(right + er);
         }
         self.players
             .retain(|p| p.pos < p.play.sample.len() as f64 && p.play.rate > 0.0);

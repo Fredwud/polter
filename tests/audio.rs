@@ -577,3 +577,105 @@ fn a_hum_moving_from_one_side_to_the_other_glides_without_a_click() {
         largest_step(&r)
     );
 }
+
+/// A short burst of noise, the same every run: what a room's echo is measured with.
+fn burst() -> Sample {
+    let mut x = 0x2545_f491u32;
+    let noise = (0..256)
+        .map(|i| {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            let fade = 1.0 - i as f32 / 256.0;
+            (x as i32) as f32 / i32::MAX as f32 * 0.8 * fade
+        })
+        .collect();
+    Sample::new("burst", noise)
+}
+
+const SMALL_ROOM: polter::Room = polter::Room {
+    decay: 0.8,
+    size: 3.0,
+    damping: 6_000.0,
+};
+
+/// The burst once in a room, sent in as far as `send`, rendered for `seconds`.
+fn echo_of(room: polter::Room, send: f32, seconds: f32) -> (Vec<f32>, Vec<f32>) {
+    let mut synth = Synth::new();
+    synth.room(room);
+    let mut play = Play::new(&burst(), 1.0);
+    play.room(send);
+    synth.start(play);
+    let mut out = vec![0.0; (seconds * SAMPLE_RATE as f32) as usize * 2];
+    synth.render(&mut out);
+    sides(&out)
+}
+
+/// The level in dB of each 20 ms of a signal.
+fn envelope_db(s: &[f32]) -> Vec<f32> {
+    s.chunks(SAMPLE_RATE as usize / 50)
+        .map(|c| {
+            10.0 * polter::math::log10(
+                c.iter().map(|v| v * v).sum::<f32>() / c.len() as f32 + 1e-30,
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn a_room_echoes_what_is_sent_into_it_and_dies_away_in_its_decay() {
+    let (l, r) = echo_of(SMALL_ROOM, 1.0, 3.0);
+    let both: Vec<f32> = l.iter().zip(&r).map(|(a, b)| a + b).collect();
+    let env = envelope_db(&both);
+    // after the burst (the first 20 ms) the echo rings on; the time it takes to fall from 5 dB
+    // to 35 dB below its start, doubled, is the time to fall by 60 dB
+    let start = env[2];
+    let at = |below: f32| {
+        env.iter()
+            .skip(2)
+            .position(|&e| e < start - below)
+            .expect("it falls") as f32
+            * 0.02
+    };
+    let decay = 2.0 * (at(35.0) - at(5.0));
+    assert!(
+        (0.55..1.1).contains(&decay),
+        "falls 60 dB in {decay} s, the room's decay is {} s",
+        SMALL_ROOM.decay
+    );
+    assert!(env[5] > -60.0, "still ringing 100 ms after: {} dB", env[5]);
+}
+
+#[test]
+fn a_recording_not_sent_into_the_room_stays_dry() {
+    let (l, r) = echo_of(SMALL_ROOM, 0.0, 1.0);
+    assert!(
+        l[300..].iter().chain(&r[300..]).all(|&v| v == 0.0),
+        "nothing after the burst"
+    );
+    let (l, _) = echo_of(polter::Room::NONE, 1.0, 1.0);
+    assert!(l[300..].iter().all(|&v| v == 0.0), "no room, no echo");
+}
+
+#[test]
+fn the_echo_differs_on_each_side_so_it_surrounds_the_listener() {
+    let (l, r) = echo_of(SMALL_ROOM, 1.0, 1.0);
+    let (a, b) = (&l[2_000..22_000], &r[2_000..22_000]);
+    let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
+    let correlation = dot / (rms(a) * rms(b) * a.len() as f32);
+    assert!(
+        correlation.abs() < 0.3,
+        "left and right alike by {correlation}"
+    );
+}
+
+#[test]
+fn the_echo_falls_silent_to_the_last_bit() {
+    // values too small to hear are made silence, so a quiet room costs nothing to compute
+    let (l, r) = echo_of(SMALL_ROOM, 1.0, 8.0);
+    let last = 7 * SAMPLE_RATE as usize;
+    assert!(
+        l[last..].iter().chain(&r[last..]).all(|&v| v == 0.0),
+        "silent after 7 s"
+    );
+}

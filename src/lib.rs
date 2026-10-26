@@ -45,7 +45,7 @@ pub mod text;
 pub mod tiles;
 pub mod window;
 
-pub use audio::{Play, Sample, Sfx, Wave};
+pub use audio::{Play, Room, Sample, Sfx, Wave};
 pub use canvas::Canvas;
 pub use console::Console;
 pub use game::{Ctx, FPS, Frozen, Game, Invariants, Knob, Session};
