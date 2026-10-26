@@ -57,33 +57,33 @@ impl Ctx {
     }
 
     /// Plays a recording once, as it was recorded, at a volume from 0.0 to 1.0. Call it from
-    /// `update`; sixteen recordings play at once, a seventeenth replaces the quietest.
-    pub fn play_sample(&mut self, sample: &Sample, volume: f32) {
-        self.play_sample_at(sample, volume, 1.0);
+    /// `update`; sixteen recordings play at once, a seventeenth replaces the quietest. It is
+    /// heard in the middle unless placed: the `Play` it returns takes a `pan` (where it is
+    /// heard, -1.0 left to 1.0 right) and a `cutoff` (how dull, as through a wall).
+    pub fn play_sample(&mut self, sample: &Sample, volume: f32) -> &mut Play {
+        self.play_sample_at(sample, volume, 1.0)
     }
 
     /// The same at another speed: 2.0 twice as fast and an octave higher, 0.5 half as fast.
-    pub fn play_sample_at(&mut self, sample: &Sample, volume: f32, rate: f32) {
-        self.plays.push(Play {
-            sample: sample.clone(),
-            volume,
-            rate,
-        });
+    pub fn play_sample_at(&mut self, sample: &Sample, volume: f32, rate: f32) -> &mut Play {
+        let mut play = Play::new(sample, volume);
+        play.rate(rate);
+        self.plays.push(play);
+        let last = self.plays.len() - 1;
+        &mut self.plays[last]
     }
 
     /// Keeps a recording sounding in a loop for as long as it is asked for: call it on every
     /// tick the sound should go on (an engine running, a pump humming), with the volume and
-    /// speed it should have now. They glide there, so nothing clicks; a tick without the call
-    /// fades it out. The key tells the hums apart; sixteen sound at once.
-    pub fn hum(&mut self, key: &'static str, sample: &Sample, volume: f32, rate: f32) {
-        self.hums.push((
-            key,
-            Play {
-                sample: sample.clone(),
-                volume,
-                rate,
-            },
-        ));
+    /// speed it should have now, and its place and dullness through the `Play` it returns. They
+    /// glide there, so nothing clicks; a tick without the call fades it out. The key tells the
+    /// hums apart; sixteen sound at once.
+    pub fn hum(&mut self, key: &'static str, sample: &Sample, volume: f32, rate: f32) -> &mut Play {
+        let mut play = Play::new(sample, volume);
+        play.rate(rate);
+        self.hums.push((key, play));
+        let last = self.hums.len() - 1;
+        &mut self.hums[last].1
     }
 }
 
@@ -249,7 +249,8 @@ pub struct Session {
     /// The hums that began in the last tick (their samples' names), and the keys asked for.
     hums_begun: Vec<&'static str>,
     hum_keys: Vec<&'static str>,
-    /// Samples of the last tick (only filled after `enable_audio`).
+    /// Samples of the last tick in stereo, left and right in turn (only filled after
+    /// `enable_audio`).
     pub audio: Vec<f32>,
     /// The invariants broken in the last tick.
     pub broken: Vec<String>,
@@ -339,7 +340,7 @@ impl Session {
                 self.synth.start(play.clone());
             }
             self.synth.hold(&hums);
-            self.audio.resize(SAMPLES_PER_FRAME, 0.0);
+            self.audio.resize(SAMPLES_PER_FRAME * 2, 0.0);
             self.synth.render(&mut self.audio);
         }
         let mut check = Invariants::default();

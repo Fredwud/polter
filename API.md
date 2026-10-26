@@ -83,7 +83,7 @@ A cart's `main` calls `polter_dev::cli::run(&[polter_dev::cli::CartInfo { name, 
 | `ctx.frame` | frame number, the first frame is 1 |
 | `ctx.rng` | the cart's random numbers (`Rng`) |
 | `ctx.play(sfx)` | start a sound effect (call it from `update`) |
-| `ctx.play_sample(&sample, volume)` · `ctx.hum(key, &sample, volume, speed)` | play a recording once · keep one looping while it is asked for, every tick |
+| `ctx.play_sample(&sample, volume)` · `ctx.hum(key, &sample, volume, speed)` | play a recording once · keep one looping while it is asked for, every tick; both return the `Play`, to place it (`.pan(-1.0..1.0)`) and dull it (`.cutoff(hz)`) |
 | `ctx.storage` | save games: `read(name)`, `write(name, bytes)`; files in `play`, memory in headless runs |
 | `ctx.picture` | whether anyone looks at this frame's picture; headless checks look only at some. A true-colour game may skip filling its canvas when it is `false` (a cart needn't care: the console handles it) |
 
@@ -189,11 +189,13 @@ static CREAK: LazyLock<Sample> =
 static ENGINE: LazyLock<Sample> =
     LazyLock::new(|| Sample::from_wav("engine", include_bytes!("../assets/engine.wav")).unwrap());
 // in update:
-ctx.play_sample(&CREAK, 0.4);                  // once
-ctx.hum("engine", &ENGINE, 0.3 * load, 0.8 + 0.4 * load); // every tick it should sound
+ctx.play_sample(&CREAK, 0.4).pan(-0.5);        // once, left of the middle
+ctx.hum("engine", &ENGINE, 0.3 * load, 0.8 + 0.4 * load) // every tick it should sound,
+    .pan(0.7)                                  // from the right
+    .cutoff(900.0);                            // dull, as behind a wall
 ```
 
-`Sample::from_wav(name, bytes)` reads WAV files of 8, 16, 24 or 32-bit PCM or 32-bit float, any channels (mixed down to one) and any rate (brought to 44.1 kHz once, on loading); `Sample::new(name, samples)` takes samples made by the game. `ctx.play_sample(&s, volume)` plays it once (`play_sample_at` with a speed: 0.5 an octave lower and twice as long); sixteen play at once, the quietest gives way. `ctx.hum(key, &s, volume, speed)` keeps it sounding in a loop as long as it is called every tick: volume and speed glide to the new values within about 30 ms, a tick without the call fades it out, and the loop's seam is crossfaded, so nothing clicks. Sound is a picture of the state, like the canvas: the game says each tick what should be heard. `check` and `listen` name a recording when it starts and a hum on its first tick (`Session::sound_names`).
+`Sample::from_wav(name, bytes)` reads WAV files of 8, 16, 24 or 32-bit PCM or 32-bit float, mono or stereo (more channels are mixed down to one) and any rate (brought to 44.1 kHz once, on loading); `Sample::new(name, samples)` takes mono samples made by the game, `Sample::stereo(name, samples)` stereo ones, left and right in turn. Sound is stereo: `pan` places a recording from -1.0 (left) to 1.0 (right) with equal power, so it is as loud wherever it stands and a sound moving across does not dip; a stereo recording keeps its own left and right, shifted the same way. `cutoff` keeps the pitches below it (12 dB less per octave above), as a wall or a closed door does; `audio::OPEN`, the default, keeps all. A hum glides to a new place and dullness as it does to a new volume. `ctx.play_sample(&s, volume)` plays it once (`play_sample_at` with a speed: 0.5 an octave lower and twice as long); sixteen play at once, the quietest gives way. `ctx.hum(key, &s, volume, speed)` keeps it sounding in a loop as long as it is called every tick: volume and speed glide to the new values within about 30 ms, a tick without the call fades it out, and the loop's seam is crossfaded, so nothing clicks. Sound is a picture of the state, like the canvas: the game says each tick what should be heard. `check` and `listen` name a recording when it starts and a hum on its first tick (`Session::sound_names`). `Session::audio` holds the last tick's samples, left and right in turn; `audio::stereo_wav` writes them as a file.
 
 ## `Rng`
 
@@ -382,7 +384,7 @@ Run it as `polter COMMAND [FOLDER] [OPTIONS]`, which builds the game first. The 
 | `shot --frame N` | one frame as PNG |
 | `clip` | the run as an animated GIF that a web page plays as it is: `--frame N` the first frame (default 1), `--frames N` how many, `--step K` every Kth tick (at least 2: browsers stretch shorter delays; default 2, thirty frames a second), `--scale S`, `--out FILE`. Up to 255 colours are kept exactly; more are shown with 255 chosen by median cut |
 | `twin` | two runs, compare picture hash and state on every frame |
-| `listen` | render the sound as WAV plus a picture: waveform, spectrogram (80 Hz to 8 kHz), and the name of every sound where it starts |
+| `listen` | render the sound as a stereo WAV plus a picture: waveform, spectrogram (80 Hz to 8 kHz), and the name of every sound where it starts; it reports the loudness of each side |
 | `assert FILE.scenario …` | run scenarios and check their expectations on every frame they cover (`--scenarios DIR` runs every `.scenario` in a folder) |
 | `knobs` | the game's tuning values: name, value, range, step |
 | `brief` | one page about the game for an agent, in the shape of llms.txt, measured now: BRIEF.md, how to work on it, the state after frame 1 and after the run, every rule and whether it held, knobs, every scenario in the game's *scenarios* folder and whether it passes, sounds, time per frame, the person's marks from the workshop, files, recent commits. `--project DIR` is the game's folder (`polter brief FOLDER` passes it), `--frames N` the run (default 600), `--out FILE` |

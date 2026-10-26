@@ -8,10 +8,30 @@ use polter::{Cart, Ctx, Machine, Screen, Sfx, Wave};
 
 const UP: Sfx = Sfx::new("up", Wave::Square, 200.0, 800.0, 20, 0.3);
 
+/// The left side of a sound effect (effects are heard in the middle: both sides alike).
 fn render(sfx: Sfx, frames: usize) -> Vec<f32> {
     let mut synth = Synth::new();
     synth.trigger(sfx);
-    let mut out = vec![0.0; frames * SAMPLES_PER_FRAME];
+    let mut out = vec![0.0; frames * SAMPLES_PER_FRAME * 2];
+    synth.render(&mut out);
+    assert!(
+        out.as_chunks::<2>().0.iter().all(|pair| pair[0] == pair[1]),
+        "an effect sounds the same on both sides"
+    );
+    out.into_iter().step_by(2).collect()
+}
+
+/// The left and the right side of stereo samples.
+fn sides(stereo: &[f32]) -> (Vec<f32>, Vec<f32>) {
+    (
+        stereo.iter().step_by(2).copied().collect(),
+        stereo.iter().skip(1).step_by(2).copied().collect(),
+    )
+}
+
+/// Renders a synth for some frames, both sides.
+fn frames(synth: &mut Synth, n: usize) -> Vec<f32> {
+    let mut out = vec![0.0; n * SAMPLES_PER_FRAME * 2];
     synth.render(&mut out);
     out
 }
@@ -116,7 +136,7 @@ fn carts_play_sounds_through_the_machine() {
     loud.enable_audio();
     loud.step(0);
     loud.step(0);
-    assert_eq!(loud.audio.len(), SAMPLES_PER_FRAME);
+    assert_eq!(loud.audio.len(), SAMPLES_PER_FRAME * 2, "stereo samples");
     assert!(
         loud.audio.iter().any(|v| v.abs() > 0.05),
         "enabled audio renders the sound"
@@ -161,10 +181,10 @@ fn the_output_carries_sound_without_clicks_despite_an_uneven_frame_pace() {
     // twenty seconds; the game runs at 59.6 fps on average, with jitter and two long hitches
     while card_clock < 20.0 {
         if game_clock <= card_clock {
-            let mut samples = vec![0.0; SAMPLES_PER_FRAME];
-            for s in samples.iter_mut() {
+            let mut samples = vec![0.0; SAMPLES_PER_FRAME * 2];
+            for pair in samples.as_chunks_mut::<2>().0 {
                 phase += 220.0 / SAMPLE_RATE as f32;
-                *s = 0.3 * polter::math::sin(phase * std::f32::consts::TAU);
+                pair.fill(0.3 * polter::math::sin(phase * std::f32::consts::TAU));
             }
             r.push(&samples);
             frame += 1;
@@ -222,7 +242,7 @@ fn noise_at_a_low_pitch_glides_instead_of_crackling() {
 
 // ---- recordings ----
 
-use polter::audio::Play;
+use polter::audio::{OPEN, Play};
 use polter::{Game, Sample, Session};
 
 /// A WAV file's bytes from its parts, for the formats `wav` does not write.
@@ -267,7 +287,8 @@ fn a_wav_loads_in_every_common_format() {
         let got = sixteen_at(&sixteen, i);
         assert!((got - w).abs() < 1e-3, "16-bit sample {i}: {got} for {w}");
     }
-    // 24-bit stereo: left 0.5, right -0.5 mixes down to 0; left and right 0.5 to 0.5
+    // 24-bit stereo stays stereo; its value is the middle of left and right: left 0.5, right
+    // -0.5 gives 0; left and right 0.5 give 0.5
     let mut data = Vec::new();
     for (l, r) in [(0.5f32, -0.5f32), (0.5, 0.5)] {
         for v in [l, r] {
@@ -276,7 +297,7 @@ fn a_wav_loads_in_every_common_format() {
         }
     }
     let stereo = Sample::from_wav("24", &wav_bytes(1, 2, SAMPLE_RATE, 24, &data)).expect("24-bit");
-    assert_eq!(stereo.len(), 2);
+    assert_eq!((stereo.len(), stereo.channels()), (2, 2));
     assert!(sixteen_at(&stereo, 0).abs() < 1e-3 && (sixteen_at(&stereo, 1) - 0.5).abs() < 1e-3);
     // 32-bit float and 8-bit
     let floats: Vec<u8> = [0.75f32, -0.25]
@@ -326,13 +347,11 @@ fn a_recording_plays_once_at_its_volume_then_falls_silent() {
     // 110.3 periods: it ends in the middle of a wave, where a cut would click
     let tone = Sample::new("tone", sine(440.0, 0.2507, 0.8));
     let mut synth = Synth::new();
-    synth.start(Play {
-        sample: tone.clone(),
-        volume: 0.5,
-        rate: 1.0,
-    });
-    let mut out = vec![0.0; SAMPLE_RATE as usize / 2];
-    synth.render(&mut out);
+    synth.start(Play::new(&tone, 0.5));
+    let mut both = vec![0.0; SAMPLE_RATE as usize];
+    synth.render(&mut both);
+    let (out, right) = sides(&both);
+    assert_eq!(out, right, "in the middle, both sides alike");
     let peak = |s: &[f32]| s.iter().fold(0.0f32, |m, v| m.max(v.abs()));
     assert!(
         (peak(&out[1000..5000]) - 0.4).abs() < 0.02,
@@ -357,21 +376,12 @@ fn a_hum_glides_in_holds_and_fades_out_without_a_click() {
     let mut all = Vec::new();
     for frame in 0..90 {
         let asked = if frame < 50 {
-            vec![(
-                "motor",
-                Play {
-                    sample: tone.clone(),
-                    volume: 0.5,
-                    rate: 1.0,
-                },
-            )]
+            vec![("motor", Play::new(&tone, 0.5))]
         } else {
             Vec::new()
         };
         synth.hold(&asked);
-        let mut out = vec![0.0; SAMPLES_PER_FRAME];
-        synth.render(&mut out);
-        all.extend(out);
+        all.extend(sides(&frames(&mut synth, 1)).0);
     }
     let peak = |s: &[f32]| s.iter().fold(0.0f32, |m, v| m.max(v.abs()));
     let f = SAMPLES_PER_FRAME;
@@ -402,17 +412,8 @@ fn a_loop_comes_round_without_a_click_at_its_seam() {
     let mut synth = Synth::new();
     let mut all = Vec::new();
     for _ in 0..80 {
-        synth.hold(&[(
-            "drone",
-            Play {
-                sample: tone.clone(),
-                volume: 1.0,
-                rate: 1.0,
-            },
-        )]);
-        let mut out = vec![0.0; SAMPLES_PER_FRAME];
-        synth.render(&mut out);
-        all.extend(out);
+        synth.hold(&[("drone", Play::new(&tone, 1.0))]);
+        all.extend(sides(&frames(&mut synth, 1)).0);
     }
     // three times round, and no step larger than the tone's own
     let own = 0.8 * 233.0 * std::f32::consts::TAU / SAMPLE_RATE as f32;
@@ -462,5 +463,117 @@ fn games_play_recordings_and_hums_and_the_tools_hear_their_names() {
     assert!(
         loud.audio.iter().any(|v| v.abs() > 0.1),
         "enabled audio carries the hum"
+    );
+}
+
+fn rms(s: &[f32]) -> f32 {
+    (s.iter().map(|v| v * v).sum::<f32>() / s.len().max(1) as f32).sqrt()
+}
+
+#[test]
+fn a_recording_is_heard_where_it_is_placed_and_as_loud_wherever_it_stands() {
+    let tone = Sample::new("tone", sine(330.0, 0.5, 0.4));
+    let heard = |pan: f32| {
+        let mut synth = Synth::new();
+        let mut play = Play::new(&tone, 0.5);
+        play.pan(pan);
+        synth.start(play);
+        let (l, r) = sides(&frames(&mut synth, 20));
+        (rms(&l[2000..14000]), rms(&r[2000..14000]))
+    };
+    let (ml, mr) = heard(0.0);
+    assert!((ml - mr).abs() < 1e-6, "in the middle: {ml} and {mr}");
+    let (ll, lr) = heard(-0.8);
+    assert!(ll > 5.0 * lr, "left: {ll} against {lr} on the right");
+    let (rl, rr) = heard(1.0);
+    assert!(rl < 1e-4 && rr > 0.1, "hard right: {rl} left, {rr} right");
+    for (pan, (l, r)) in [
+        (0.0, (ml, mr)),
+        (-0.8, (ll, lr)),
+        (1.0, (rl, rr)),
+        (0.4, heard(0.4)),
+    ] {
+        let power = l * l + r * r;
+        let middle = ml * ml + mr * mr;
+        assert!(
+            (power / middle - 1.0).abs() < 0.02,
+            "equal power at {pan}: {power} against {middle} in the middle"
+        );
+    }
+}
+
+#[test]
+fn a_cutoff_dulls_the_high_pitches_and_keeps_the_low_ones() {
+    let kept = |freq: f32, cutoff: f32| {
+        let tone = Sample::new("tone", sine(freq, 0.5, 0.4));
+        let mut synth = Synth::new();
+        let mut play = Play::new(&tone, 1.0);
+        play.cutoff(cutoff);
+        synth.start(play);
+        let (l, _) = sides(&frames(&mut synth, 20));
+        rms(&l[4000..14000]) / (0.4 / std::f32::consts::SQRT_2)
+    };
+    assert!(kept(5000.0, polter::audio::OPEN) > 0.97, "open keeps all");
+    let high = kept(5000.0, 500.0);
+    assert!(
+        high < 0.03,
+        "5 kHz through a 500 Hz cutoff: {high} of it is left"
+    );
+    let low = kept(100.0, 500.0);
+    assert!(
+        low > 0.9,
+        "100 Hz through a 500 Hz cutoff: {low} of it is left"
+    );
+}
+
+#[test]
+fn a_stereo_recording_keeps_its_left_and_right() {
+    // left a 0.5 tone, right silent: as a WAV, loaded and played in the middle
+    let tone = sine(440.0, 0.2, 0.5);
+    let mut data = Vec::new();
+    for v in &tone {
+        data.extend_from_slice(&((v * 32_767.0) as i16).to_le_bytes());
+        data.extend_from_slice(&0i16.to_le_bytes());
+    }
+    let s = Sample::from_wav("left", &wav_bytes(1, 2, SAMPLE_RATE, 16, &data)).expect("stereo");
+    assert_eq!(s.channels(), 2);
+    let mut synth = Synth::new();
+    synth.start(Play::new(&s, 1.0));
+    let (l, r) = sides(&frames(&mut synth, 10));
+    assert!(rms(&l[1000..7000]) > 0.3, "the left side sounds");
+    assert!(rms(&r) < 1e-6, "the right side stays silent: {}", rms(&r));
+    // a stereo WAV of the engine's own writing reads back as it was
+    let back = Sample::from_wav("back", &polter::audio::stereo_wav(&[0.5, -0.5, 0.25, 0.0]))
+        .expect("loads");
+    assert_eq!((back.len(), back.channels()), (2, 2));
+}
+
+#[test]
+fn a_hum_moving_from_one_side_to_the_other_glides_without_a_click() {
+    let tone = Sample::new("hum", sine(220.0, 0.5, 0.6));
+    let mut synth = Synth::new();
+    let mut all = Vec::new();
+    for frame in 0..60 {
+        let mut play = Play::new(&tone, 0.6);
+        play.pan(if frame < 30 { -1.0 } else { 1.0 })
+            .cutoff(if frame < 30 { OPEN } else { 300.0 });
+        synth.hold(&[("motor", play)]);
+        all.extend(frames(&mut synth, 1));
+    }
+    let (l, r) = sides(&all);
+    let f = SAMPLES_PER_FRAME;
+    assert!(
+        rms(&l[20 * f..29 * f]) > 0.2 && rms(&r[20 * f..29 * f]) < 0.01,
+        "first on the left"
+    );
+    assert!(
+        rms(&r[50 * f..]) > 3.0 * rms(&l[50 * f..]),
+        "then on the right"
+    );
+    assert!(
+        largest_step(&l) < 0.03 && largest_step(&r) < 0.03,
+        "no click on the way: {} and {}",
+        largest_step(&l),
+        largest_step(&r)
     );
 }

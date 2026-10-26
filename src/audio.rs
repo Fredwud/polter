@@ -2,8 +2,9 @@
 // the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 //! Sound: a tiny deterministic synth, and recordings. Carts describe sound effects or play
-//! recordings (once, or looped for as long as they ask), Polter mixes them into samples, the same
-//! way in a window and headless, so agents can check sound with `listen`.
+//! recordings (once, or looped for as long as they ask), each at its place between left and
+//! right, Polter mixes them into stereo samples, the same way in a window and headless, so agents
+//! can check sound with `listen`.
 
 /// Samples per second.
 pub const SAMPLE_RATE: u32 = 44_100;
@@ -22,6 +23,8 @@ const SEAM: usize = 1024;
 /// A recording played once fades in over its first samples and out over its last ones.
 const EDGE_IN: f64 = 64.0;
 const EDGE_OUT: f64 = 256.0;
+/// A `Play::cutoff` at or above this keeps every pitch: the recording sounds as it was made.
+pub const OPEN: f32 = 20_000.0;
 
 /// The shape of a tone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -107,9 +110,9 @@ impl Sfx {
     }
 }
 
-/// A recording, ready to play: mono samples at `SAMPLE_RATE`, shared, so copies cost nothing.
-/// Load it from a WAV file's bytes, for instance a file in the game's folder taken in with
-/// `include_bytes!`:
+/// A recording, ready to play: mono or stereo samples at `SAMPLE_RATE`, shared, so copies cost
+/// nothing. Load it from a WAV file's bytes, for instance a file in the game's folder taken in
+/// with `include_bytes!`:
 ///
 /// ```
 /// use polter::audio::{wav, Sample};
@@ -121,112 +124,251 @@ impl Sfx {
 pub struct Sample {
     /// Shown by `check` and `listen`, as an `Sfx`'s name is.
     pub name: &'static str,
+    /// The values; in stereo, left and right in turn.
     data: std::sync::Arc<[f32]>,
+    stereo: bool,
+}
+
+/// Values held to -1.0..1.0, and anything not a number made silent.
+fn clean(samples: Vec<f32>) -> std::sync::Arc<[f32]> {
+    samples
+        .into_iter()
+        .map(|v| {
+            if v.is_finite() {
+                v.clamp(-1.0, 1.0)
+            } else {
+                0.0
+            }
+        })
+        .collect()
 }
 
 impl Sample {
     /// From samples already at `SAMPLE_RATE`, mono, -1.0 to 1.0 (louder ones are held there).
     pub fn new(name: &'static str, samples: Vec<f32>) -> Sample {
-        let clean: Vec<f32> = samples
-            .into_iter()
-            .map(|v| {
-                if v.is_finite() {
-                    v.clamp(-1.0, 1.0)
-                } else {
-                    0.0
-                }
-            })
-            .collect();
         Sample {
             name,
-            data: clean.into(),
+            data: clean(samples),
+            stereo: false,
+        }
+    }
+
+    /// From stereo samples already at `SAMPLE_RATE`, left and right in turn (a last value
+    /// without its partner is dropped).
+    pub fn stereo(name: &'static str, mut samples: Vec<f32>) -> Sample {
+        samples.truncate(samples.len() / 2 * 2);
+        Sample {
+            name,
+            data: clean(samples),
+            stereo: true,
         }
     }
 
     /// From a WAV file: PCM of 8, 16, 24 or 32 bits or 32-bit float (also in the extensible
-    /// format), any number of channels (mixed down to one), any rate (brought to `SAMPLE_RATE`
-    /// once, here, along straight lines between the samples).
+    /// format), mono or stereo (more channels are mixed down to one), any rate (brought to
+    /// `SAMPLE_RATE` once, here, along straight lines between the samples).
     pub fn from_wav(name: &'static str, bytes: &[u8]) -> Result<Sample, String> {
-        let (rate, mono) = read_wav(bytes)?;
-        if rate == SAMPLE_RATE || mono.len() < 2 {
-            return Ok(Sample::new(name, mono));
-        }
-        let step = rate as f64 / SAMPLE_RATE as f64;
-        let n = ((mono.len() - 1) as f64 / step).floor() as usize + 1;
-        let resampled = (0..n)
-            .map(|j| {
+        let (rate, channels, values) = read_wav(bytes)?;
+        let frames = values.len() / channels;
+        let values = if rate == SAMPLE_RATE || frames < 2 {
+            values
+        } else {
+            let step = rate as f64 / SAMPLE_RATE as f64;
+            let n = ((frames - 1) as f64 / step).floor() as usize + 1;
+            let mut out = Vec::with_capacity(n * channels);
+            for j in 0..n {
                 let pos = j as f64 * step;
                 let i = pos as usize;
                 let t = (pos - i as f64) as f32;
-                let next = mono[(i + 1).min(mono.len() - 1)];
-                mono[i] + (next - mono[i]) * t
-            })
-            .collect();
-        Ok(Sample::new(name, resampled))
+                let next = (i + 1).min(frames - 1);
+                for c in 0..channels {
+                    let (a, b) = (values[i * channels + c], values[next * channels + c]);
+                    out.push(a + (b - a) * t);
+                }
+            }
+            out
+        };
+        Ok(if channels == 2 {
+            Sample::stereo(name, values)
+        } else {
+            Sample::new(name, values)
+        })
     }
 
-    /// Its length in samples.
+    /// Its length in samples (in stereo, pairs of them).
     pub fn len(&self) -> usize {
-        self.data.len()
+        self.data.len() / self.channels()
     }
 
     pub fn is_empty(&self) -> bool {
         self.data.is_empty()
     }
 
+    /// 1 for mono, 2 for stereo.
+    pub fn channels(&self) -> usize {
+        if self.stereo { 2 } else { 1 }
+    }
+
     /// How long it plays at its own speed.
     pub fn seconds(&self) -> f32 {
-        self.data.len() as f32 / SAMPLE_RATE as f32
+        self.len() as f32 / SAMPLE_RATE as f32
     }
 
-    /// One of its values (0.0 past its end).
+    /// One of its values (in stereo, the middle of left and right; 0.0 past its end).
     pub fn value(&self, i: usize) -> f32 {
-        self.data.get(i).copied().unwrap_or(0.0)
+        self.frame(i).map_or(0.0, |(l, r)| (l + r) * 0.5)
     }
 
-    /// The value between two samples, along the straight line; silence outside.
-    fn at(&self, pos: f64) -> f32 {
+    /// Its values at sample `i`, left and right (the same twice in mono).
+    fn frame(&self, i: usize) -> Option<(f32, f32)> {
+        if self.stereo {
+            Some((*self.data.get(2 * i)?, *self.data.get(2 * i + 1)?))
+        } else {
+            self.data.get(i).map(|&v| (v, v))
+        }
+    }
+
+    /// The values between two samples, along the straight line; silence outside.
+    fn at(&self, pos: f64) -> (f32, f32) {
         if pos < 0.0 {
-            return 0.0;
+            return (0.0, 0.0);
         }
         let i = pos as usize;
-        let Some(&a) = self.data.get(i) else {
-            return 0.0;
+        let Some((al, ar)) = self.frame(i) else {
+            return (0.0, 0.0);
         };
-        let b = self.data.get(i + 1).copied().unwrap_or(0.0);
-        a + (b - a) * (pos - i as f64) as f32
+        let (bl, br) = self.frame(i + 1).unwrap_or((0.0, 0.0));
+        let t = (pos - i as f64) as f32;
+        (al + (bl - al) * t, ar + (br - ar) * t)
     }
 
     /// The seam's length for this recording, and the loop's length without it.
     fn seam(&self) -> (usize, f64) {
-        let seam = SEAM.min(self.data.len() / 4);
-        (seam, (self.data.len() - seam) as f64)
+        let seam = SEAM.min(self.len() / 4);
+        (seam, (self.len() - seam) as f64)
     }
 
-    /// Its value at `pos` in a loop: once it has come round, the start is faded in from the end.
-    fn looped(&self, pos: f64, wrapped: bool) -> f32 {
+    /// Its values at `pos` in a loop: once it has come round, the start is faded in from the end.
+    fn looped(&self, pos: f64, wrapped: bool) -> (f32, f32) {
         let (seam, len) = self.seam();
-        let v = self.at(pos);
+        let (l, r) = self.at(pos);
         if wrapped && seam > 0 && pos < seam as f64 {
             let w = (pos / seam as f64) as f32;
-            v * w + self.at(pos + len) * (1.0 - w)
+            let (el, er) = self.at(pos + len);
+            (l * w + el * (1.0 - w), r * w + er * (1.0 - w))
         } else {
-            v
+            (l, r)
         }
     }
 }
 
-/// A recording to start or keep sounding: how loud (0.0 to 1.0) and how fast (1.0 as recorded;
-/// 2.0 twice as fast and an octave higher, 0.5 half as fast and an octave lower).
+/// A recording to start or keep sounding: how loud (0.0 to 1.0), how fast (1.0 as recorded; 2.0
+/// twice as fast and an octave higher, 0.5 half as fast and an octave lower), where it is heard
+/// and how dull. `Ctx::play_sample` and `Ctx::hum` hand it back, so a game can place it there:
+///
+/// ```ignore
+/// ctx.hum("motors", &MOTORS, 0.5, 1.0).pan(0.6).cutoff(900.0); // aft, behind a bulkhead
+/// ```
 #[derive(Clone, Debug)]
 pub struct Play {
     pub sample: Sample,
     pub volume: f32,
     pub rate: f32,
+    /// Where it is heard: -1.0 left, 0.0 in the middle, 1.0 right. Equal power: as loud
+    /// wherever it stands, so a sound passing from one side to the other does not dip. A stereo
+    /// recording keeps its own left and right, shifted this way.
+    pub pan: f32,
+    /// The highest pitch it keeps, in Hz, as through a wall or a closed door (`OPEN` keeps all).
+    pub cutoff: f32,
 }
 
-/// A WAV file's rate and its samples mixed down to one channel.
-fn read_wav(bytes: &[u8]) -> Result<(u32, Vec<f32>), String> {
+impl Play {
+    /// As recorded, in the middle, at a volume.
+    pub fn new(sample: &Sample, volume: f32) -> Play {
+        Play {
+            sample: sample.clone(),
+            volume,
+            rate: 1.0,
+            pan: 0.0,
+            cutoff: OPEN,
+        }
+    }
+
+    pub fn rate(&mut self, rate: f32) -> &mut Play {
+        self.rate = rate;
+        self
+    }
+
+    pub fn pan(&mut self, pan: f32) -> &mut Play {
+        self.pan = pan;
+        self
+    }
+
+    pub fn cutoff(&mut self, hz: f32) -> &mut Play {
+        self.cutoff = hz;
+        self
+    }
+
+    /// The gains for left and right: equal power, 1.0 each in the middle.
+    fn gains(&self) -> (f32, f32) {
+        if self.pan == 0.0 {
+            return (1.0, 1.0);
+        }
+        let a = (self.pan.clamp(-1.0, 1.0) + 1.0) * std::f32::consts::FRAC_PI_4;
+        let (sin, cos) = crate::math::sin_cos(a);
+        (
+            cos * std::f32::consts::SQRT_2,
+            sin * std::f32::consts::SQRT_2,
+        )
+    }
+
+    /// The low-pass filter's coefficient for its cutoff: 1.0 lets everything through.
+    fn dullness(&self) -> f32 {
+        if self.cutoff >= OPEN {
+            1.0
+        } else {
+            1.0 - crate::math::exp(
+                -std::f32::consts::TAU * self.cutoff.max(20.0) / SAMPLE_RATE as f32,
+            )
+        }
+    }
+}
+
+/// Two gentle low-passes in a row for each side (12 dB less per octave above the cutoff), with
+/// their coefficient: what a wall leaves of a sound.
+#[derive(Clone, Copy, Debug)]
+struct Dull {
+    k: f32,
+    left: [f32; 2],
+    right: [f32; 2],
+}
+
+impl Dull {
+    fn new(k: f32) -> Dull {
+        Dull {
+            k,
+            left: [0.0; 2],
+            right: [0.0; 2],
+        }
+    }
+
+    fn pass(&mut self, (l, r): (f32, f32)) -> (f32, f32) {
+        if self.k >= 1.0 {
+            self.left = [l; 2];
+            self.right = [r; 2];
+            return (l, r);
+        }
+        for (s, v) in [(&mut self.left, l), (&mut self.right, r)] {
+            s[0] += (v - s[0]) * self.k;
+            s[1] += (s[0] - s[1]) * self.k;
+        }
+        (self.left[1], self.right[1])
+    }
+}
+
+/// A WAV file's rate, its channels (1 or 2) and its values, in stereo left and right in turn;
+/// more than two channels are mixed down to one.
+fn read_wav(bytes: &[u8]) -> Result<(u32, usize, Vec<f32>), String> {
     if bytes.len() < 12 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
         return Err("not a WAV file (no RIFF/WAVE header)".into());
     }
@@ -282,7 +424,12 @@ fn read_wav(bytes: &[u8]) -> Result<(u32, Vec<f32>), String> {
         }
     };
     let frame = channels * width;
-    let mono = (0..data.len() / frame)
+    let frames = data.len() / frame;
+    if channels == 2 {
+        let values = (0..frames * 2).map(|k| read(k * width)).collect();
+        return Ok((rate, 2, values));
+    }
+    let mono = (0..frames)
         .map(|k| {
             (0..channels)
                 .map(|c| read(k * frame + c * width))
@@ -290,7 +437,7 @@ fn read_wav(bytes: &[u8]) -> Result<(u32, Vec<f32>), String> {
                 / channels as f32
         })
         .collect();
-    Ok((rate, mono))
+    Ok((rate, 1, mono))
 }
 
 /// A recording playing once.
@@ -298,6 +445,8 @@ fn read_wav(bytes: &[u8]) -> Result<(u32, Vec<f32>), String> {
 struct Player {
     play: Play,
     pos: f64,
+    gains: (f32, f32),
+    dull: Dull,
 }
 
 /// A recording held in a loop while the game asks for it.
@@ -309,9 +458,22 @@ struct Held {
     wrapped: bool,
     volume: f32,
     rate: f32,
+    gains: (f32, f32),
+    dull: Dull,
     goal_volume: f32,
     goal_rate: f32,
+    goal_gains: (f32, f32),
+    goal_dull: f32,
     asked: bool,
+}
+
+/// One step of a glide from `now` towards `goal`; close enough, it arrives.
+fn glide(now: f32, goal: f32) -> f32 {
+    if (goal - now).abs() < 1e-5 {
+        goal
+    } else {
+        now + (goal - now) * GLIDE
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -385,11 +547,18 @@ impl Synth {
         {
             self.players.remove(quiet);
         }
-        self.players.push(Player { play, pos: 0.0 });
+        let (gains, dull) = (play.gains(), Dull::new(play.dullness()));
+        self.players.push(Player {
+            play,
+            pos: 0.0,
+            gains,
+            dull,
+        });
     }
 
     /// The recordings asked to keep sounding in this tick, by key: a new one starts and fades in,
-    /// a known one glides to its new volume and speed, one not asked for fades out.
+    /// a known one glides to its new volume, speed, place and dullness, one not asked for fades
+    /// out.
     pub fn hold(&mut self, hums: &[(&'static str, Play)]) {
         for h in &mut self.held {
             h.asked = false;
@@ -404,6 +573,8 @@ impl Synth {
                 h.asked = true;
                 h.goal_volume = play.volume;
                 h.goal_rate = play.rate;
+                h.goal_gains = play.gains();
+                h.goal_dull = play.dullness();
             } else if self.held.len() < LOOPS && play.sample.len() > 1 {
                 self.held.push(Held {
                     key,
@@ -412,8 +583,12 @@ impl Synth {
                     wrapped: false,
                     volume: 0.0,
                     rate: play.rate,
+                    gains: play.gains(),
+                    dull: Dull::new(play.dullness()),
                     goal_volume: play.volume,
                     goal_rate: play.rate,
+                    goal_gains: play.gains(),
+                    goal_dull: play.dullness(),
                     asked: true,
                 });
             }
@@ -456,10 +631,11 @@ impl Synth {
         (x as i32) as f32 / i32::MAX as f32
     }
 
-    /// Fills `out` with the next samples, mixed and gently limited to -1.0..1.0.
+    /// Fills `out` with the next samples in stereo, left and right in turn, mixed and gently
+    /// limited to -1.0..1.0. Sound effects are heard in the middle.
     pub fn render(&mut self, out: &mut [f32]) {
         let attack = SAMPLE_RATE as f32 * 0.002; // 2 ms, so tones don't click on
-        for sample in out.iter_mut() {
+        for pair in out.as_chunks_mut::<2>().0 {
             let mut mix = 0.0;
             for k in 0..VOICES {
                 let Some(mut v) = self.voices[k] else {
@@ -508,19 +684,30 @@ impl Synth {
                 v.pos += 1;
                 self.voices[k] = Some(v);
             }
+            let (mut left, mut right) = (mix, mix);
             for p in &mut self.players {
                 let len = p.play.sample.len() as f64;
                 let edge = (p.pos / EDGE_IN)
                     .min((len - p.pos) / EDGE_OUT)
                     .clamp(0.0, 1.0) as f32;
-                mix += p.play.sample.at(p.pos) * p.play.volume * edge;
+                let (l, r) = p.dull.pass(p.play.sample.at(p.pos));
+                let k = p.play.volume * edge;
+                left += l * p.gains.0 * k;
+                right += r * p.gains.1 * k;
                 p.pos += p.play.rate.max(0.0) as f64;
             }
             for h in &mut self.held {
                 let goal = if h.asked { h.goal_volume } else { 0.0 };
-                h.volume += (goal - h.volume) * GLIDE;
-                h.rate += (h.goal_rate - h.rate) * GLIDE;
-                mix += h.sample.looped(h.pos, h.wrapped) * h.volume;
+                h.volume = glide(h.volume, goal);
+                h.rate = glide(h.rate, h.goal_rate);
+                h.gains = (
+                    glide(h.gains.0, h.goal_gains.0),
+                    glide(h.gains.1, h.goal_gains.1),
+                );
+                h.dull.k = glide(h.dull.k, h.goal_dull);
+                let (l, r) = h.dull.pass(h.sample.looped(h.pos, h.wrapped));
+                left += l * h.gains.0 * h.volume;
+                right += r * h.gains.1 * h.volume;
                 h.pos += h.rate.max(0.0) as f64;
                 let (_, len) = h.sample.seam();
                 if h.pos >= len {
@@ -528,7 +715,8 @@ impl Synth {
                     h.wrapped = true;
                 }
             }
-            *sample = limit(mix);
+            pair[0] = limit(left);
+            pair[1] = limit(right);
         }
         self.players
             .retain(|p| p.pos < p.play.sample.len() as f64 && p.play.rate > 0.0);
@@ -547,7 +735,7 @@ fn limit(x: f32) -> f32 {
     }
 }
 
-/// Carries the synth's samples to a sound card that pulls them at its own pace and rate.
+/// Carries the synth's stereo samples to a sound card that pulls them at its own pace and rate.
 ///
 /// The game delivers one frame of samples at a time, not quite evenly. A buffer of about
 /// 67 ms absorbs that; instead of dropping or repeating samples (which clicks), playback runs
@@ -556,10 +744,11 @@ fn limit(x: f32) -> f32 {
 /// few milliseconds and fades back in when it is full again: a gap, never a click.
 #[derive(Clone, Debug)]
 pub struct Resampler {
-    queue: std::collections::VecDeque<f32>,
+    /// Left and right.
+    queue: std::collections::VecDeque<[f32; 2]>,
     pos: f32,
-    prev: f32,
-    next: f32,
+    prev: [f32; 2],
+    next: [f32; 2],
     gain: f32,
     started: bool,
     /// Samples the card asked for while the buffer was empty (for tests and diagnosis).
@@ -579,17 +768,18 @@ impl Resampler {
         Resampler {
             queue: std::collections::VecDeque::with_capacity(Self::TARGET * 4),
             pos: 0.0,
-            prev: 0.0,
-            next: 0.0,
+            prev: [0.0; 2],
+            next: [0.0; 2],
             gain: 0.0,
             started: false,
             starved: 0,
         }
     }
 
-    /// The game hands over a frame's samples.
+    /// The game hands over a frame's samples, left and right in turn (`Session::audio`).
     pub fn push(&mut self, samples: &[f32]) {
-        self.queue.extend(samples);
+        self.queue
+            .extend(samples.as_chunks::<2>().0.iter().copied());
         // far ahead (the window was dragged, the machine stalled): catch up, rarely
         if self.queue.len() > Self::TARGET * 8 {
             let drop = self.queue.len() - Self::TARGET * 2;
@@ -601,7 +791,8 @@ impl Resampler {
         self.queue.len()
     }
 
-    /// The card asks for `out.len() / channels` frames at `rate` Hz.
+    /// The card asks for `out.len() / channels` frames at `rate` Hz: one channel gets the middle
+    /// of left and right, two get left and right, any more the middle again.
     pub fn pull(&mut self, out: &mut [f32], channels: usize, rate: u32) {
         if !self.started && self.queue.len() >= Self::TARGET {
             self.started = true;
@@ -636,13 +827,33 @@ impl Resampler {
             } else {
                 (self.gain - ramp).max(0.0)
             };
-            frame.fill((self.prev + (self.next - self.prev) * self.pos) * self.gain);
+            let side =
+                |c: usize| (self.prev[c] + (self.next[c] - self.prev[c]) * self.pos) * self.gain;
+            let (l, r) = (side(0), side(1));
+            match frame {
+                [one] => *one = (l + r) * 0.5,
+                [left, right, rest @ ..] => {
+                    *left = l;
+                    *right = r;
+                    rest.fill((l + r) * 0.5);
+                }
+                [] => {}
+            }
         }
     }
 }
 
 /// A 16-bit mono WAV file.
 pub fn wav(samples: &[f32]) -> Vec<u8> {
+    encode(samples, 1)
+}
+
+/// A 16-bit stereo WAV file, from samples given left and right in turn (`Session::audio`).
+pub fn stereo_wav(samples: &[f32]) -> Vec<u8> {
+    encode(samples, 2)
+}
+
+fn encode(samples: &[f32], channels: u16) -> Vec<u8> {
     let data_len = samples.len() as u32 * 2;
     let mut out = Vec::with_capacity(44 + data_len as usize);
     out.extend_from_slice(b"RIFF");
@@ -650,10 +861,10 @@ pub fn wav(samples: &[f32]) -> Vec<u8> {
     out.extend_from_slice(b"WAVEfmt ");
     out.extend_from_slice(&16u32.to_le_bytes()); // fmt chunk size
     out.extend_from_slice(&1u16.to_le_bytes()); // PCM
-    out.extend_from_slice(&1u16.to_le_bytes()); // mono
+    out.extend_from_slice(&channels.to_le_bytes());
     out.extend_from_slice(&SAMPLE_RATE.to_le_bytes());
-    out.extend_from_slice(&(SAMPLE_RATE * 2).to_le_bytes()); // bytes per second
-    out.extend_from_slice(&2u16.to_le_bytes()); // block align
+    out.extend_from_slice(&(SAMPLE_RATE * 2 * channels as u32).to_le_bytes()); // bytes per second
+    out.extend_from_slice(&(2 * channels).to_le_bytes()); // block align
     out.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
     out.extend_from_slice(b"data");
     out.extend_from_slice(&data_len.to_le_bytes());

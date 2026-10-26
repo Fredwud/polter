@@ -18,7 +18,7 @@
 use crate::ears::ears;
 use crate::scenario::{Scenario, parse_state};
 use crate::sheet;
-use polter::audio::{SAMPLE_RATE, wav};
+use polter::audio::{SAMPLE_RATE, stereo_wav};
 use polter::haunt::Haunt;
 use polter::input::Frame;
 use polter::state::quote;
@@ -758,8 +758,14 @@ fn cmd_listen(e: &Env) -> u8 {
         },
     );
     let (wav_path, ears_path) = (format!("{dir}/sound.wav"), format!("{dir}/ears.png"));
-    let (w, h, rgb) = ears(&samples, &events, &e.pal);
-    if let Err(err) = std::fs::write(&wav_path, wav(&samples))
+    let middle: Vec<f32> = samples
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| (pair[0] + pair[1]) * 0.5)
+        .collect();
+    let (w, h, rgb) = ears(&middle, &events, &e.pal);
+    if let Err(err) = std::fs::write(&wav_path, stereo_wav(&samples))
         .and_then(|_| std::fs::write(&ears_path, png::encode(w, h, &rgb)))
     {
         eprintln!("cannot write the sound files: {err}");
@@ -767,13 +773,25 @@ fn cmd_listen(e: &Env) -> u8 {
     }
     let peak = samples.iter().fold(0f32, |a, s| a.max(s.abs()));
     let clipped = samples.iter().filter(|s| s.abs() >= 0.999).count();
+    let rms = |side: usize| {
+        let n = (samples.len() / 2).max(1) as f32;
+        (samples
+            .iter()
+            .skip(side)
+            .step_by(2)
+            .map(|s| s * s)
+            .sum::<f32>()
+            / n)
+            .sqrt()
+    };
+    let (left, right) = (rms(0), rms(1));
     if e.o.json {
         let list: Vec<String> = events
             .iter()
             .map(|(f, n)| format!("{{\"frame\":{f},\"name\":{}}}", quote(n)))
             .collect();
         println!(
-            "{{\"command\":\"listen\",\"cart\":{},\"exit\":{},\"panic\":{},\"events\":[{}],\"peak\":{peak:.3},\"clipped\":{clipped},\"wav\":{},\"ears\":{}}}",
+            "{{\"command\":\"listen\",\"cart\":{},\"exit\":{},\"panic\":{},\"events\":[{}],\"peak\":{peak:.3},\"clipped\":{clipped},\"left\":{left:.4},\"right\":{right:.4},\"wav\":{},\"ears\":{}}}",
             quote(e.cart.name),
             p.is_some() as u8,
             panic_json(&p),
@@ -794,9 +812,10 @@ fn cmd_listen(e: &Env) -> u8 {
             }
         );
         println!(
-            "  Peak {peak:.2}, {clipped} clipped samples ({:.1} s at {SAMPLE_RATE} Hz)",
-            samples.len() as f32 / SAMPLE_RATE as f32
+            "  Peak {peak:.2}, {clipped} clipped samples ({:.1} s in stereo at {SAMPLE_RATE} Hz)",
+            samples.len() as f32 / 2.0 / SAMPLE_RATE as f32
         );
+        println!("  Loudness (rms): left {left:.3}, right {right:.3}");
         println!("  Sound:   {wav_path}");
         println!("  Picture: {ears_path} (waveform, spectrogram from 80 Hz to 8 kHz, sound names)");
         report_panic(&p);
