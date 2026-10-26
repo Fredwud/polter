@@ -1,14 +1,27 @@
 // This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of
 // the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! Sound: a tiny deterministic synth. Carts describe sound effects, Polter renders them into
-//! samples, the same way in a window and headless, so agents can check sound with `listen`.
+//! Sound: a tiny deterministic synth, and recordings. Carts describe sound effects or play
+//! recordings (once, or looped for as long as they ask), Polter mixes them into samples, the same
+//! way in a window and headless, so agents can check sound with `listen`.
 
 /// Samples per second.
 pub const SAMPLE_RATE: u32 = 44_100;
 /// Samples rendered per frame (44 100 / 60).
 pub const SAMPLES_PER_FRAME: usize = (SAMPLE_RATE / crate::machine::FPS) as usize;
 const VOICES: usize = 8;
+/// Recordings playing once at the same time, and recordings held in a loop.
+const PLAYERS: usize = 16;
+const LOOPS: usize = 16;
+/// How far a held recording's volume and speed move towards what is asked, per sample: about
+/// 30 ms to get most of the way, so a change never clicks.
+const GLIDE: f32 = 1.0 / (0.03 * SAMPLE_RATE as f32);
+/// A loop's seam: its last samples are faded into its first ones over this many (about 23 ms),
+/// so a recording that does not end as it begins loops without a click.
+const SEAM: usize = 1024;
+/// A recording played once fades in over its first samples and out over its last ones.
+const EDGE_IN: f64 = 64.0;
+const EDGE_OUT: f64 = 256.0;
 
 /// The shape of a tone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -94,6 +107,213 @@ impl Sfx {
     }
 }
 
+/// A recording, ready to play: mono samples at `SAMPLE_RATE`, shared, so copies cost nothing.
+/// Load it from a WAV file's bytes, for instance a file in the game's folder taken in with
+/// `include_bytes!`:
+///
+/// ```
+/// use polter::audio::{wav, Sample};
+/// let bytes = wav(&[0.0, 0.5, -0.5, 0.25]); // any WAV: 8, 16, 24 or 32 bits, or float
+/// let tick = Sample::from_wav("tick", &bytes).unwrap();
+/// assert_eq!(tick.len(), 4);
+/// ```
+#[derive(Clone, Debug)]
+pub struct Sample {
+    /// Shown by `check` and `listen`, as an `Sfx`'s name is.
+    pub name: &'static str,
+    data: std::sync::Arc<[f32]>,
+}
+
+impl Sample {
+    /// From samples already at `SAMPLE_RATE`, mono, -1.0 to 1.0 (louder ones are held there).
+    pub fn new(name: &'static str, samples: Vec<f32>) -> Sample {
+        let clean: Vec<f32> = samples
+            .into_iter()
+            .map(|v| {
+                if v.is_finite() {
+                    v.clamp(-1.0, 1.0)
+                } else {
+                    0.0
+                }
+            })
+            .collect();
+        Sample {
+            name,
+            data: clean.into(),
+        }
+    }
+
+    /// From a WAV file: PCM of 8, 16, 24 or 32 bits or 32-bit float (also in the extensible
+    /// format), any number of channels (mixed down to one), any rate (brought to `SAMPLE_RATE`
+    /// once, here, along straight lines between the samples).
+    pub fn from_wav(name: &'static str, bytes: &[u8]) -> Result<Sample, String> {
+        let (rate, mono) = read_wav(bytes)?;
+        if rate == SAMPLE_RATE || mono.len() < 2 {
+            return Ok(Sample::new(name, mono));
+        }
+        let step = rate as f64 / SAMPLE_RATE as f64;
+        let n = ((mono.len() - 1) as f64 / step).floor() as usize + 1;
+        let resampled = (0..n)
+            .map(|j| {
+                let pos = j as f64 * step;
+                let i = pos as usize;
+                let t = (pos - i as f64) as f32;
+                let next = mono[(i + 1).min(mono.len() - 1)];
+                mono[i] + (next - mono[i]) * t
+            })
+            .collect();
+        Ok(Sample::new(name, resampled))
+    }
+
+    /// Its length in samples.
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
+
+    /// How long it plays at its own speed.
+    pub fn seconds(&self) -> f32 {
+        self.data.len() as f32 / SAMPLE_RATE as f32
+    }
+
+    /// One of its values (0.0 past its end).
+    pub fn value(&self, i: usize) -> f32 {
+        self.data.get(i).copied().unwrap_or(0.0)
+    }
+
+    /// The value between two samples, along the straight line; silence outside.
+    fn at(&self, pos: f64) -> f32 {
+        if pos < 0.0 {
+            return 0.0;
+        }
+        let i = pos as usize;
+        let Some(&a) = self.data.get(i) else {
+            return 0.0;
+        };
+        let b = self.data.get(i + 1).copied().unwrap_or(0.0);
+        a + (b - a) * (pos - i as f64) as f32
+    }
+
+    /// The seam's length for this recording, and the loop's length without it.
+    fn seam(&self) -> (usize, f64) {
+        let seam = SEAM.min(self.data.len() / 4);
+        (seam, (self.data.len() - seam) as f64)
+    }
+
+    /// Its value at `pos` in a loop: once it has come round, the start is faded in from the end.
+    fn looped(&self, pos: f64, wrapped: bool) -> f32 {
+        let (seam, len) = self.seam();
+        let v = self.at(pos);
+        if wrapped && seam > 0 && pos < seam as f64 {
+            let w = (pos / seam as f64) as f32;
+            v * w + self.at(pos + len) * (1.0 - w)
+        } else {
+            v
+        }
+    }
+}
+
+/// A recording to start or keep sounding: how loud (0.0 to 1.0) and how fast (1.0 as recorded;
+/// 2.0 twice as fast and an octave higher, 0.5 half as fast and an octave lower).
+#[derive(Clone, Debug)]
+pub struct Play {
+    pub sample: Sample,
+    pub volume: f32,
+    pub rate: f32,
+}
+
+/// A WAV file's rate and its samples mixed down to one channel.
+fn read_wav(bytes: &[u8]) -> Result<(u32, Vec<f32>), String> {
+    if bytes.len() < 12 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+        return Err("not a WAV file (no RIFF/WAVE header)".into());
+    }
+    let u16_at = |b: &[u8], i: usize| u16::from_le_bytes([b[i], b[i + 1]]);
+    let u32_at = |b: &[u8], i: usize| u32::from_le_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]);
+    let (mut fmt, mut data) = (None, None);
+    let mut pos = 12;
+    while pos + 8 <= bytes.len() {
+        let size = u32_at(bytes, pos + 4) as usize;
+        let body = &bytes[pos + 8..(pos + 8).saturating_add(size).min(bytes.len())];
+        match &bytes[pos..pos + 4] {
+            b"fmt " => fmt = Some(body),
+            b"data" => data = Some(body),
+            _ => {}
+        }
+        // chunks are padded to an even length
+        pos = pos.saturating_add(8 + size + (size & 1));
+    }
+    let fmt = fmt.ok_or("no fmt chunk")?;
+    let data = data.ok_or("no data chunk")?;
+    if fmt.len() < 16 {
+        return Err("the fmt chunk is too short".into());
+    }
+    let mut format = u16_at(fmt, 0);
+    let channels = u16_at(fmt, 2).max(1) as usize;
+    let rate = u32_at(fmt, 4);
+    let bits = u16_at(fmt, 14);
+    if format == 0xfffe && fmt.len() >= 26 {
+        format = u16_at(fmt, 24); // the extensible format names its subformat here
+    }
+    let width = match (format, bits) {
+        (1, 8) => 1,
+        (1, 16) => 2,
+        (1, 24) => 3,
+        (1, 32) | (3, 32) => 4,
+        _ => {
+            return Err(format!(
+                "format {format} with {bits} bits: only PCM of 8, 16, 24 or 32 bits and 32-bit float"
+            ));
+        }
+    };
+    if rate == 0 {
+        return Err("a rate of 0".into());
+    }
+    let read = |i: usize| -> f32 {
+        let b = &data[i..i + width];
+        match (format, bits) {
+            (1, 8) => (b[0] as f32 - 128.0) / 128.0,
+            (1, 16) => i16::from_le_bytes([b[0], b[1]]) as f32 / 32_768.0,
+            (1, 24) => (i32::from_le_bytes([0, b[0], b[1], b[2]]) >> 8) as f32 / 8_388_608.0,
+            (1, _) => i32::from_le_bytes([b[0], b[1], b[2], b[3]]) as f32 / 2_147_483_648.0,
+            _ => f32::from_le_bytes([b[0], b[1], b[2], b[3]]),
+        }
+    };
+    let frame = channels * width;
+    let mono = (0..data.len() / frame)
+        .map(|k| {
+            (0..channels)
+                .map(|c| read(k * frame + c * width))
+                .sum::<f32>()
+                / channels as f32
+        })
+        .collect();
+    Ok((rate, mono))
+}
+
+/// A recording playing once.
+#[derive(Clone)]
+struct Player {
+    play: Play,
+    pos: f64,
+}
+
+/// A recording held in a loop while the game asks for it.
+#[derive(Clone)]
+struct Held {
+    key: &'static str,
+    sample: Sample,
+    pos: f64,
+    wrapped: bool,
+    volume: f32,
+    rate: f32,
+    goal_volume: f32,
+    goal_rate: f32,
+    asked: bool,
+}
+
 #[derive(Clone, Copy)]
 struct Voice {
     sfx: Sfx,
@@ -129,6 +349,8 @@ pub struct Synth {
     voices: [Option<Voice>; VOICES],
     rng: u32,
     triggered: u64,
+    players: Vec<Player>,
+    held: Vec<Held>,
 }
 
 impl Default for Synth {
@@ -143,6 +365,58 @@ impl Synth {
             voices: [None; VOICES],
             rng: 0x9e37_79b9,
             triggered: 0,
+            players: Vec::new(),
+            held: Vec::new(),
+        }
+    }
+
+    /// Starts a recording once. When sixteen are playing, the quietest gives way.
+    pub fn start(&mut self, play: Play) {
+        if play.sample.is_empty() {
+            return;
+        }
+        if self.players.len() >= PLAYERS
+            && let Some(quiet) = (0..self.players.len()).min_by(|&a, &b| {
+                self.players[a]
+                    .play
+                    .volume
+                    .total_cmp(&self.players[b].play.volume)
+            })
+        {
+            self.players.remove(quiet);
+        }
+        self.players.push(Player { play, pos: 0.0 });
+    }
+
+    /// The recordings asked to keep sounding in this tick, by key: a new one starts and fades in,
+    /// a known one glides to its new volume and speed, one not asked for fades out.
+    pub fn hold(&mut self, hums: &[(&'static str, Play)]) {
+        for h in &mut self.held {
+            h.asked = false;
+        }
+        for (key, play) in hums {
+            if let Some(h) = self.held.iter_mut().find(|h| h.key == *key) {
+                if !std::sync::Arc::ptr_eq(&h.sample.data, &play.sample.data) {
+                    h.sample = play.sample.clone();
+                    h.pos = 0.0;
+                    h.wrapped = false;
+                }
+                h.asked = true;
+                h.goal_volume = play.volume;
+                h.goal_rate = play.rate;
+            } else if self.held.len() < LOOPS && play.sample.len() > 1 {
+                self.held.push(Held {
+                    key,
+                    sample: play.sample.clone(),
+                    pos: 0.0,
+                    wrapped: false,
+                    volume: 0.0,
+                    rate: play.rate,
+                    goal_volume: play.volume,
+                    goal_rate: play.rate,
+                    asked: true,
+                });
+            }
         }
     }
 
@@ -234,8 +508,31 @@ impl Synth {
                 v.pos += 1;
                 self.voices[k] = Some(v);
             }
+            for p in &mut self.players {
+                let len = p.play.sample.len() as f64;
+                let edge = (p.pos / EDGE_IN)
+                    .min((len - p.pos) / EDGE_OUT)
+                    .clamp(0.0, 1.0) as f32;
+                mix += p.play.sample.at(p.pos) * p.play.volume * edge;
+                p.pos += p.play.rate.max(0.0) as f64;
+            }
+            for h in &mut self.held {
+                let goal = if h.asked { h.goal_volume } else { 0.0 };
+                h.volume += (goal - h.volume) * GLIDE;
+                h.rate += (h.goal_rate - h.rate) * GLIDE;
+                mix += h.sample.looped(h.pos, h.wrapped) * h.volume;
+                h.pos += h.rate.max(0.0) as f64;
+                let (_, len) = h.sample.seam();
+                if h.pos >= len {
+                    h.pos -= len;
+                    h.wrapped = true;
+                }
+            }
             *sample = limit(mix);
         }
+        self.players
+            .retain(|p| p.pos < p.play.sample.len() as f64 && p.play.rate > 0.0);
+        self.held.retain(|h| h.asked || h.volume > 1e-4);
     }
 }
 

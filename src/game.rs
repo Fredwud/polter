@@ -6,7 +6,7 @@
 //! every tick. A `Session` runs a game, with a window or without one; every command of the
 //! command line (cli.rs) is a session.
 
-use crate::audio::{SAMPLES_PER_FRAME, Sfx, Synth};
+use crate::audio::{Play, SAMPLES_PER_FRAME, Sample, Sfx, Synth};
 use crate::canvas::Canvas;
 use crate::input::{Frame, Input};
 use crate::rng::Rng;
@@ -33,6 +33,8 @@ pub struct Ctx {
     /// picture they show.
     pub picture: bool,
     pub(crate) sounds: Vec<Sfx>,
+    pub(crate) plays: Vec<Play>,
+    pub(crate) hums: Vec<(&'static str, Play)>,
 }
 
 impl Ctx {
@@ -44,12 +46,44 @@ impl Ctx {
             storage: Storage::memory(),
             picture: true,
             sounds: Vec::new(),
+            plays: Vec::new(),
+            hums: Vec::new(),
         }
     }
 
     /// Starts a sound effect. Call it from `update`; up to eight sounds play at once.
     pub fn play(&mut self, sfx: Sfx) {
         self.sounds.push(sfx);
+    }
+
+    /// Plays a recording once, as it was recorded, at a volume from 0.0 to 1.0. Call it from
+    /// `update`; sixteen recordings play at once, a seventeenth replaces the quietest.
+    pub fn play_sample(&mut self, sample: &Sample, volume: f32) {
+        self.play_sample_at(sample, volume, 1.0);
+    }
+
+    /// The same at another speed: 2.0 twice as fast and an octave higher, 0.5 half as fast.
+    pub fn play_sample_at(&mut self, sample: &Sample, volume: f32, rate: f32) {
+        self.plays.push(Play {
+            sample: sample.clone(),
+            volume,
+            rate,
+        });
+    }
+
+    /// Keeps a recording sounding in a loop for as long as it is asked for: call it on every
+    /// tick the sound should go on (an engine running, a pump humming), with the volume and
+    /// speed it should have now. They glide there, so nothing clicks; a tick without the call
+    /// fades it out. The key tells the hums apart; sixteen sound at once.
+    pub fn hum(&mut self, key: &'static str, sample: &Sample, volume: f32, rate: f32) {
+        self.hums.push((
+            key,
+            Play {
+                sample: sample.clone(),
+                volume,
+                rate,
+            },
+        ));
     }
 }
 
@@ -210,6 +244,11 @@ pub struct Session {
     pub canvas: Canvas,
     /// Sounds the game started in the last tick.
     pub sounds: Vec<Sfx>,
+    /// Recordings the game started in the last tick.
+    pub plays: Vec<Play>,
+    /// The hums that began in the last tick (their samples' names), and the keys asked for.
+    hums_begun: Vec<&'static str>,
+    hum_keys: Vec<&'static str>,
     /// Samples of the last tick (only filled after `enable_audio`).
     pub audio: Vec<f32>,
     /// The invariants broken in the last tick.
@@ -226,11 +265,23 @@ impl Session {
             ctx: Ctx::new(seed),
             canvas: Canvas::new(w, h),
             sounds: Vec::new(),
+            plays: Vec::new(),
+            hums_begun: Vec::new(),
+            hum_keys: Vec::new(),
             audio: Vec::new(),
             broken: Vec::new(),
             synth: Synth::new(),
             audio_on: false,
         }
+    }
+
+    /// The names of every sound that began in the last tick: effects, recordings played once,
+    /// hums on their first tick. `check` counts them and `listen` labels them.
+    pub fn sound_names(&self) -> Vec<&'static str> {
+        let mut names: Vec<&'static str> = self.sounds.iter().map(|s| s.name).collect();
+        names.extend(self.plays.iter().map(|p| p.sample.name));
+        names.extend(&self.hums_begun);
+        names
     }
 
     /// The concrete game, for tools and tests that need more than `state()`.
@@ -271,10 +322,23 @@ impl Session {
         self.game.update(&mut self.ctx);
         self.sounds.clear();
         self.sounds.append(&mut self.ctx.sounds);
+        self.plays.clear();
+        self.plays.append(&mut self.ctx.plays);
+        let hums = std::mem::take(&mut self.ctx.hums);
+        self.hums_begun = hums
+            .iter()
+            .filter(|(key, _)| !self.hum_keys.contains(key))
+            .map(|(_, play)| play.sample.name)
+            .collect();
+        self.hum_keys = hums.iter().map(|(key, _)| *key).collect();
         if self.audio_on {
             for &sfx in &self.sounds {
                 self.synth.trigger(sfx);
             }
+            for play in &self.plays {
+                self.synth.start(play.clone());
+            }
+            self.synth.hold(&hums);
             self.audio.resize(SAMPLES_PER_FRAME, 0.0);
             self.synth.render(&mut self.audio);
         }

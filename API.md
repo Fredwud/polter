@@ -83,6 +83,7 @@ A cart's `main` calls `polter_dev::cli::run(&[polter_dev::cli::CartInfo { name, 
 | `ctx.frame` | frame number, the first frame is 1 |
 | `ctx.rng` | the cart's random numbers (`Rng`) |
 | `ctx.play(sfx)` | start a sound effect (call it from `update`) |
+| `ctx.play_sample(&sample, volume)` · `ctx.hum(key, &sample, volume, speed)` | play a recording once · keep one looping while it is asked for, every tick |
 | `ctx.storage` | save games: `read(name)`, `write(name, bytes)`; files in `play`, memory in headless runs |
 | `ctx.picture` | whether anyone looks at this frame's picture; headless checks look only at some. A true-colour game may skip filling its canvas when it is `false` (a cart needn't care: the console handles it) |
 
@@ -177,6 +178,22 @@ ctx.play(JUMP);
 `Sfx::new(name, wave, from_hz, to_hz, frames, volume)`: a tone that slides from one pitch to the other while it fades out. Waves: `Square` (hollow, loud), `Triangle` (soft), `Saw` (buzzy), `Noise` (hiss and rumble; the pitch sets how fast it changes). Eight sounds play at once; a ninth replaces the oldest. Keep volumes around 0.15 to 0.35.
 
 The `name` matters: `check` counts sounds by name and `listen` labels them, so agents can verify sound without hearing it.
+
+### Recordings
+
+```rust
+use polter::Sample;
+use std::sync::LazyLock;
+static CREAK: LazyLock<Sample> =
+    LazyLock::new(|| Sample::from_wav("creak", include_bytes!("../assets/creak.wav")).unwrap());
+static ENGINE: LazyLock<Sample> =
+    LazyLock::new(|| Sample::from_wav("engine", include_bytes!("../assets/engine.wav")).unwrap());
+// in update:
+ctx.play_sample(&CREAK, 0.4);                  // once
+ctx.hum("engine", &ENGINE, 0.3 * load, 0.8 + 0.4 * load); // every tick it should sound
+```
+
+`Sample::from_wav(name, bytes)` reads WAV files of 8, 16, 24 or 32-bit PCM or 32-bit float, any channels (mixed down to one) and any rate (brought to 44.1 kHz once, on loading); `Sample::new(name, samples)` takes samples made by the game. `ctx.play_sample(&s, volume)` plays it once (`play_sample_at` with a speed: 0.5 an octave lower and twice as long); sixteen play at once, the quietest gives way. `ctx.hum(key, &s, volume, speed)` keeps it sounding in a loop as long as it is called every tick: volume and speed glide to the new values within about 30 ms, a tick without the call fades it out, and the loop's seam is crossfaded, so nothing clicks. Sound is a picture of the state, like the canvas: the game says each tick what should be heard. `check` and `listen` name a recording when it starts and a hum on its first tick (`Session::sound_names`).
 
 ## `Rng`
 

@@ -426,7 +426,7 @@ fn cmd_check(e: &Env) -> u8 {
         &e.haunt,
         |f| f == last_frame,
         |m| {
-            played.extend(m.sounds.iter().map(|s| s.name));
+            played.extend(m.sound_names());
             if e.o.perf {
                 let now = std::time::Instant::now();
                 times.push((now - last).as_secs_f64() * 1000.0);
@@ -754,7 +754,7 @@ fn cmd_listen(e: &Env) -> u8 {
         |_| false,
         |m| {
             samples.extend_from_slice(&m.audio);
-            events.extend(m.sounds.iter().map(|s| (m.ctx.frame, s.name)));
+            events.extend(m.sound_names().into_iter().map(|n| (m.ctx.frame, n)));
         },
     );
     let (wav_path, ears_path) = (format!("{dir}/sound.wav"), format!("{dir}/ears.png"));

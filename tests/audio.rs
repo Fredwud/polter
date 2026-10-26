@@ -219,3 +219,248 @@ fn noise_at_a_low_pitch_glides_instead_of_crackling() {
         "{jumps} hard steps in a low rumble"
     );
 }
+
+// ---- recordings ----
+
+use polter::audio::Play;
+use polter::{Game, Sample, Session};
+
+/// A WAV file's bytes from its parts, for the formats `wav` does not write.
+fn wav_bytes(format: u16, channels: u16, rate: u32, bits: u16, data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&(36 + data.len() as u32).to_le_bytes());
+    out.extend_from_slice(b"WAVEfmt ");
+    out.extend_from_slice(&16u32.to_le_bytes());
+    out.extend_from_slice(&format.to_le_bytes());
+    out.extend_from_slice(&channels.to_le_bytes());
+    out.extend_from_slice(&rate.to_le_bytes());
+    let block = channels as u32 * bits as u32 / 8;
+    out.extend_from_slice(&(rate * block).to_le_bytes());
+    out.extend_from_slice(&(block as u16).to_le_bytes());
+    out.extend_from_slice(&bits.to_le_bytes());
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    out.extend_from_slice(data);
+    out
+}
+
+fn sine(freq: f32, seconds: f32, volume: f32) -> Vec<f32> {
+    let n = (seconds * SAMPLE_RATE as f32) as usize;
+    (0..n)
+        .map(|i| {
+            volume * polter::math::sin(i as f32 / SAMPLE_RATE as f32 * freq * std::f32::consts::TAU)
+        })
+        .collect()
+}
+
+/// The largest jump between two neighbouring samples: a click shows as a jump.
+fn largest_step(s: &[f32]) -> f32 {
+    s.windows(2).fold(0.0f32, |m, w| m.max((w[1] - w[0]).abs()))
+}
+
+#[test]
+fn a_wav_loads_in_every_common_format() {
+    let want = [0.0f32, 0.5, -0.5, 0.25];
+    let sixteen = Sample::from_wav("16", &wav(&want)).expect("16-bit mono");
+    for (i, w) in want.iter().enumerate() {
+        let got = sixteen_at(&sixteen, i);
+        assert!((got - w).abs() < 1e-3, "16-bit sample {i}: {got} for {w}");
+    }
+    // 24-bit stereo: left 0.5, right -0.5 mixes down to 0; left and right 0.5 to 0.5
+    let mut data = Vec::new();
+    for (l, r) in [(0.5f32, -0.5f32), (0.5, 0.5)] {
+        for v in [l, r] {
+            let i = (v * 8_388_607.0) as i32;
+            data.extend_from_slice(&i.to_le_bytes()[..3]);
+        }
+    }
+    let stereo = Sample::from_wav("24", &wav_bytes(1, 2, SAMPLE_RATE, 24, &data)).expect("24-bit");
+    assert_eq!(stereo.len(), 2);
+    assert!(sixteen_at(&stereo, 0).abs() < 1e-3 && (sixteen_at(&stereo, 1) - 0.5).abs() < 1e-3);
+    // 32-bit float and 8-bit
+    let floats: Vec<u8> = [0.75f32, -0.25]
+        .iter()
+        .flat_map(|v| v.to_le_bytes())
+        .collect();
+    let float = Sample::from_wav("f", &wav_bytes(3, 1, SAMPLE_RATE, 32, &floats)).expect("float");
+    assert!((sixteen_at(&float, 0) - 0.75).abs() < 1e-6);
+    let eight =
+        Sample::from_wav("8", &wav_bytes(1, 1, SAMPLE_RATE, 8, &[128, 192])).expect("8-bit");
+    assert!(sixteen_at(&eight, 0).abs() < 1e-6 && (sixteen_at(&eight, 1) - 0.5).abs() < 1e-6);
+}
+
+/// One of a recording's values.
+fn sixteen_at(s: &Sample, i: usize) -> f32 {
+    s.value(i)
+}
+
+#[test]
+fn a_wav_at_another_rate_is_brought_to_the_engines() {
+    let half: Vec<u8> = (0..1000)
+        .flat_map(|i| ((i as f32 / 1000.0 * 16_000.0) as i16).to_le_bytes())
+        .collect();
+    let s = Sample::from_wav("slow", &wav_bytes(1, 1, SAMPLE_RATE / 2, 16, &half)).expect("loads");
+    assert!(
+        (s.len() as i32 - 1999).abs() <= 1,
+        "twice the samples: {}",
+        s.len()
+    );
+    assert!((s.seconds() - 1000.0 / 22_050.0).abs() < 0.001);
+}
+
+#[test]
+fn a_file_that_is_no_wav_is_refused_with_a_reason() {
+    let err = Sample::from_wav("junk", b"definitely not a wav file").unwrap_err();
+    assert!(err.contains("WAV"), "{err}");
+    let odd = wav_bytes(2, 1, SAMPLE_RATE, 4, &[0, 0]);
+    assert!(
+        Sample::from_wav("adpcm", &odd)
+            .unwrap_err()
+            .contains("format 2")
+    );
+}
+
+#[test]
+fn a_recording_plays_once_at_its_volume_then_falls_silent() {
+    // 110.3 periods: it ends in the middle of a wave, where a cut would click
+    let tone = Sample::new("tone", sine(440.0, 0.2507, 0.8));
+    let mut synth = Synth::new();
+    synth.start(Play {
+        sample: tone.clone(),
+        volume: 0.5,
+        rate: 1.0,
+    });
+    let mut out = vec![0.0; SAMPLE_RATE as usize / 2];
+    synth.render(&mut out);
+    let peak = |s: &[f32]| s.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+    assert!(
+        (peak(&out[1000..5000]) - 0.4).abs() < 0.02,
+        "0.8 at half volume: {}",
+        peak(&out[1000..5000])
+    );
+    assert!(
+        out[tone.len()..].iter().all(|v| *v == 0.0),
+        "silent after its end"
+    );
+    assert!(
+        largest_step(&out) < 0.06,
+        "no click at its start or end: {}",
+        largest_step(&out)
+    );
+}
+
+#[test]
+fn a_hum_glides_in_holds_and_fades_out_without_a_click() {
+    let tone = Sample::new("hum", sine(220.0, 0.5, 0.6));
+    let mut synth = Synth::new();
+    let mut all = Vec::new();
+    for frame in 0..90 {
+        let asked = if frame < 50 {
+            vec![(
+                "motor",
+                Play {
+                    sample: tone.clone(),
+                    volume: 0.5,
+                    rate: 1.0,
+                },
+            )]
+        } else {
+            Vec::new()
+        };
+        synth.hold(&asked);
+        let mut out = vec![0.0; SAMPLES_PER_FRAME];
+        synth.render(&mut out);
+        all.extend(out);
+    }
+    let peak = |s: &[f32]| s.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+    let f = SAMPLES_PER_FRAME;
+    assert!(
+        peak(&all[..f / 4]) < 0.15,
+        "it fades in: {}",
+        peak(&all[..f / 4])
+    );
+    assert!(
+        (peak(&all[30 * f..40 * f]) - 0.3).abs() < 0.02,
+        "it holds 0.6 at half volume"
+    );
+    assert!(
+        peak(&all[80 * f..]) < 0.01,
+        "gone within half a second of the last call"
+    );
+    assert!(
+        largest_step(&all) < 0.03,
+        "never a click: {}",
+        largest_step(&all)
+    );
+}
+
+#[test]
+fn a_loop_comes_round_without_a_click_at_its_seam() {
+    // 0.3 s of 233 Hz does not end where it begins: looped raw, the seam would jump
+    let tone = Sample::new("seam", sine(233.0, 0.3, 0.8));
+    let mut synth = Synth::new();
+    let mut all = Vec::new();
+    for _ in 0..80 {
+        synth.hold(&[(
+            "drone",
+            Play {
+                sample: tone.clone(),
+                volume: 1.0,
+                rate: 1.0,
+            },
+        )]);
+        let mut out = vec![0.0; SAMPLES_PER_FRAME];
+        synth.render(&mut out);
+        all.extend(out);
+    }
+    // three times round, and no step larger than the tone's own
+    let own = 0.8 * 233.0 * std::f32::consts::TAU / SAMPLE_RATE as f32;
+    assert!(
+        largest_step(&all[2000..]) < own * 1.6,
+        "{} against {own}",
+        largest_step(&all[2000..])
+    );
+}
+
+struct Player;
+
+impl Game for Player {
+    fn update(&mut self, ctx: &mut Ctx) {
+        thread_local! {
+            static CLICK: Sample = Sample::new("click", sine(1000.0, 0.05, 0.5));
+            static HUM: Sample = Sample::new("engine", sine(110.0, 0.4, 0.5));
+        }
+        if ctx.frame == 2 {
+            CLICK.with(|s| ctx.play_sample(s, 0.8));
+        }
+        HUM.with(|s| ctx.hum("engine", s, 0.4, 1.0));
+    }
+    fn draw(&self, _: &mut polter::Canvas, _: &Ctx) {}
+}
+
+#[test]
+fn games_play_recordings_and_hums_and_the_tools_hear_their_names() {
+    let mut s = Session::new(Box::new(Player), 1);
+    s.step(0);
+    assert_eq!(
+        s.sound_names(),
+        ["engine"],
+        "the hum begins on the first tick"
+    );
+    s.step(0);
+    assert_eq!(
+        s.sound_names(),
+        ["click"],
+        "the click in the second; the hum goes on unnamed"
+    );
+    let mut loud = Session::new(Box::new(Player), 1);
+    loud.enable_audio();
+    for _ in 0..10 {
+        loud.step(0);
+    }
+    assert!(
+        loud.audio.iter().any(|v| v.abs() > 0.1),
+        "enabled audio carries the hum"
+    );
+}
